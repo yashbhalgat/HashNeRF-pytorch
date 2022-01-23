@@ -184,7 +184,7 @@ def create_nerf(args):
     embeddirs_fn = None
     if args.use_viewdirs:
         # use positional encoding
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, i=0)
+        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.bounding_box, i=0)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
