@@ -6,6 +6,8 @@ import json
 import torch.nn.functional as F
 import cv2
 
+from utils import get_bbox3d_for_blenderobj
+
 
 trans_t = lambda t : torch.Tensor([
     [1,0,0,0],
@@ -85,7 +87,8 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         imgs = imgs_half_res
         # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
 
-        
-    return imgs, poses, render_poses, [H, W, focal], i_split
+    bounding_box = get_bbox3d_for_blenderobj(metas["train"], H, W, near=2.0, far=6.0)
+
+    return imgs, poses, render_poses, [H, W, focal], i_split, bounding_box
 
 
