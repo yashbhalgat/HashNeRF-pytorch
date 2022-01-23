@@ -75,20 +75,19 @@ class HashEmbedder(nn.Module):
 
         # step 1
         # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
-        c00 = voxel_embedds[:,0]*(1-weights[:,0]) + voxel_embedds[:,4]*weights[:,0]
-        c01 = voxel_embedds[:,1]*(1-weights[:,0]) + voxel_embedds[:,5]*weights[:,0]
-        c10 = voxel_embedds[:,2]*(1-weights[:,0]) + voxel_embedds[:,6]*weights[:,0]
-        c11 = voxel_embedds[:,3]*(1-weights[:,0]) + voxel_embedds[:,7]*weights[:,0]
+        c00 = voxel_embedds[:,0]*(1-weights[:,0][:,None]) + voxel_embedds[:,4]*weights[:,0][:,None]
+        c01 = voxel_embedds[:,1]*(1-weights[:,0][:,None]) + voxel_embedds[:,5]*weights[:,0][:,None]
+        c10 = voxel_embedds[:,2]*(1-weights[:,0][:,None]) + voxel_embedds[:,6]*weights[:,0][:,None]
+        c11 = voxel_embedds[:,3]*(1-weights[:,0][:,None]) + voxel_embedds[:,7]*weights[:,0][:,None]
 
         # step 2
-        c0 = c00*(1-weights[:,1]) + c10*weights[:,1]
-        c1 = c01*(1-weights[:,1]) + c11*weights[:,1]
+        c0 = c00*(1-weights[:,1][:,None]) + c10*weights[:,1][:,None]
+        c1 = c01*(1-weights[:,1][:,None]) + c11*weights[:,1][:,None]
 
         # step 3
-        c = c0*(1-weights[:,2]) + c1*weights[:,2]
+        c = c0*(1-weights[:,2][:,None]) + c1*weights[:,2][:,None]
 
         print("Check dimensions of 'c' = B x 2")
-        pdb.set_trace()
         return c
 
     def forward(self, x):
@@ -100,16 +99,12 @@ class HashEmbedder(nn.Module):
                                                 x, self.bounding_box, \
                                                 log2_res, self.log2_hashmap_size)
             
-            voxel_embedds = self.embeddings[hashed_voxel_indices]
-            print("Check dimensions of voxel_embedds = B x 8 x 2")
-            pdb.set_trace()
+            voxel_embedds = self.embeddings(hashed_voxel_indices)
 
             x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
             x_embedded_all.append(x_embedded)
 
-        print("Check how to concatenate x_embedded_all")
-        pdb.set_trace()
-        return torch.cat(x_embedded_all)
+        return torch.cat(x_embedded_all, dim=-1)
 
 
 def get_embedder(multires, bounding_box, i=0):

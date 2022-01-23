@@ -2,6 +2,7 @@ N_importance = 128
 N_rand = 1024
 N_samples = 64
 basedir = ./logs
+bounding_box = (tensor([-2.9720, -3.0033, -2.3284]), tensor([3.0126, 3.0070, 2.3385]))
 chunk = 32768
 config = configs/chair.txt
 datadir = ./data/nerf_synthetic/chair

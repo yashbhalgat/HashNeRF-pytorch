@@ -46,7 +46,7 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
             find_min_max(min_point)
             find_min_max(max_point)
 
-    return (min_bound, max_bound)
+    return (torch.tensor(min_bound), torch.tensor(max_bound))
 
 
 def get_voxel_vertices(xyz, bounding_box, log2_res, log2_hashmap_size):
@@ -60,7 +60,7 @@ def get_voxel_vertices(xyz, bounding_box, log2_res, log2_hashmap_size):
 
     if not torch.all(xyz < box_max) or not torch.all(xyz > box_min):
         print("ALERT: some points are outside the bounding box!")
-        import pdb; pdb.set_trace()
+        pdb.set_trace()
 
     grid_size = (box_max-box_min)/resolution
     
@@ -69,18 +69,14 @@ def get_voxel_vertices(xyz, bounding_box, log2_res, log2_hashmap_size):
     voxel_max_vertex = voxel_min_vertex + torch.tensor([1.0,1.0,1.0])*grid_size
 
     hashed_voxel_indices = [] # B x 8 ... 000,001,010,011,100,101,110,111
-    for i in [0.0, 1.0]:
-        for j in [0.0, 1.0]:
-            for k in [0.0, 1.0]:
+    for i in [0, 1]:
+        for j in [0, 1]:
+            for k in [0, 1]:
                 vertex_idx = bottom_left_idx + torch.tensor([i,j,k])
                 # vertex = bottom_left + torch.tensor([i,j,k])*grid_size
                 hashed_voxel_indices.append(hash(vertex_idx, log2_hashmap_size))
-    
-    # CHECK THIS!
-    pdb.set_trace()
-    hashed_voxel_indices = torch.stack(hashed_voxel_indices, dim=0)
                 
-    return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices
+    return voxel_min_vertex, voxel_max_vertex, torch.stack(hashed_voxel_indices, dim=1)
 
 
 
