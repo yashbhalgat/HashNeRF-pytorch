@@ -183,7 +183,8 @@ def create_nerf(args):
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
+        # use positional encoding
+        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, 0)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
@@ -466,8 +467,8 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true', 
                         help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=0, 
-                        help='set 0 for default positional encoding, -1 for none')
+    parser.add_argument("--i_embed", type=int, default=1, 
+                        help='set 1 for default hashed embedding, 0 for positional encoding, -1 for none')
     parser.add_argument("--multires", type=int, default=10, 
                         help='log2 of max freq for positional encoding (3D location)')
     parser.add_argument("--multires_views", type=int, default=4, 
@@ -624,7 +625,12 @@ def train():
 
     # Create log dir and copy the config file
     basedir = args.basedir
+    if args.i_embed==0:
+        args.expname += "_positional"
+    elif args.i_embed==1:
+        args.expname += "_hashed"
     expname = args.expname
+
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
     f = os.path.join(basedir, expname, 'args.txt')
     with open(f, 'w') as file:

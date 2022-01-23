@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import pdb
 
 from utils import get_voxel_vertices
 
@@ -49,70 +50,86 @@ class PositionalEmbedder:
 
 
 class HashEmbedder(nn.Module):
-    def __init__(self, n_levels=16, n_features_per_level=2,\
+    def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
                 log2_hashmap_size=19, base_resolution=16):
         super(HashEmbedder, self).__init__()
+        self.bounding_box = bounding_box
         self.n_levels = n_levels
         self.n_features_per_level = n_features_per_level
         self.log2_hashmap_size = log2_hashmap_size
         self.base_resolution = base_resolution
+        self.out_dim = self.n_levels * self.n_features_per_level
 
         self.embeddings = nn.Embedding(2**self.log2_hashmap_size, \
                                         self.n_features_per_level)
         
     def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
+        '''
+        x: B x 3
+        voxel_min_vertex: B x 3
+        voxel_max_vertex: B x 3
+        voxel_embedds: B x 8 x 2
+        '''
         # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
-        weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex)
+        weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex) # B x 3
 
         # step 1
-        c00 = voxel_embedds['000']*(1-weights[0]) + voxel_embedds['100']*weights[0]
-        c01 = voxel_embedds['001']*(1-weights[0]) + voxel_embedds['101']*weights[0]
-        c10 = voxel_embedds['010']*(1-weights[0]) + voxel_embedds['110']*weights[0]
-        c11 = voxel_embedds['011']*(1-weights[0]) + voxel_embedds['111']*weights[0]
+        # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
+        c00 = voxel_embedds[:,0]*(1-weights[:,0]) + voxel_embedds[:,4]*weights[:,0]
+        c01 = voxel_embedds[:,1]*(1-weights[:,0]) + voxel_embedds[:,5]*weights[:,0]
+        c10 = voxel_embedds[:,2]*(1-weights[:,0]) + voxel_embedds[:,6]*weights[:,0]
+        c11 = voxel_embedds[:,3]*(1-weights[:,0]) + voxel_embedds[:,7]*weights[:,0]
 
         # step 2
-        c0 = c00*(1-weights[1]) + c10*weights[1]
-        c1 = c01*(1-weights[1]) + c11*weights[1]
+        c0 = c00*(1-weights[:,1]) + c10*weights[:,1]
+        c1 = c01*(1-weights[:,1]) + c11*weights[:,1]
 
         # step 3
-        c = c0*(1-weights[2]) + c1*weights[2]
+        c = c0*(1-weights[:,2]) + c1*weights[:,2]
 
+        print("Check dimensions of 'c' = B x 2")
+        pdb.set_trace()
         return c
 
-    def forward(self, x, bounding_box):
+    def forward(self, x):
         # x is 3D point position: B x 3
         x_embedded_all = []
         for i in range(self.n_levels):
             log2_res = self.base_resolution + i
             voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices = get_voxel_vertices(\
-                                                x, bounding_box, \
+                                                x, self.bounding_box, \
                                                 log2_res, self.log2_hashmap_size)
             
-            voxel_embedds = {}
-            for key in hashed_voxel_indices:
-                voxel_embedds[key] = self.embeddings[hashed_voxel_indices[key]]
+            voxel_embedds = self.embeddings[hashed_voxel_indices]
+            print("Check dimensions of voxel_embedds = B x 8 x 2")
+            pdb.set_trace()
 
             x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
             x_embedded_all.append(x_embedded)
 
+        print("Check how to concatenate x_embedded_all")
+        pdb.set_trace()
         return torch.cat(x_embedded_all)
 
 
-def get_embedder(multires, i=0):
+def get_embedder(multires, bounding_box, i=0):
     if i == -1:
         return nn.Identity(), 3
-    
-    embed_kwargs = {
-                'include_input' : True,
-                'input_dims' : 3,
-                'max_freq_log2' : multires-1,
-                'num_freqs' : multires,
-                'log_sampling' : True,
-                'periodic_fns' : [torch.sin, torch.cos],
-    }
-    
-    embedder_obj = PositionalEmbedder(**embed_kwargs)
-    embed = lambda x, eo=embedder_obj : eo.embed(x)
+    elif i == 0:
+        embed_kwargs = {
+                    'include_input' : True,
+                    'input_dims' : 3,
+                    'max_freq_log2' : multires-1,
+                    'num_freqs' : multires,
+                    'log_sampling' : True,
+                    'periodic_fns' : [torch.sin, torch.cos],
+        }
+        
+        embedder_obj = PositionalEmbedder(**embed_kwargs)
+        embed = lambda x, eo=embedder_obj : eo.embed(x)
+    elif i == 1:
+        embedder_obj = HashEmbedder(bounding_box=bounding_box)
+        embed = lambda x, eo=embedder_obj : eo(x)
     return embed, embedder_obj.out_dim
 
 

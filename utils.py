@@ -66,17 +66,18 @@ def get_voxel_vertices(xyz, bounding_box, log2_res, log2_hashmap_size):
     
     bottom_left_idx = torch.floor((xyz-box_min)/grid_size).int()
     voxel_min_vertex = bottom_left_idx*grid_size + box_min
-    voxel_max_vertex = voxel_min_vertex + torch.tensor([1,1,1])*grid_size
+    voxel_max_vertex = voxel_min_vertex + torch.tensor([1.0,1.0,1.0])*grid_size
 
     hashed_voxel_indices = [] # B x 8 ... 000,001,010,011,100,101,110,111
-    for i in [0,1]:
-        for j in [0,1]:
-            for k in [0,1]:
+    for i in [0.0, 1.0]:
+        for j in [0.0, 1.0]:
+            for k in [0.0, 1.0]:
                 vertex_idx = bottom_left_idx + torch.tensor([i,j,k])
                 # vertex = bottom_left + torch.tensor([i,j,k])*grid_size
                 hashed_voxel_indices.append(hash(vertex_idx, log2_hashmap_size))
     
     # CHECK THIS!
+    pdb.set_trace()
     hashed_voxel_indices = torch.stack(hashed_voxel_indices, dim=0)
                 
     return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices
