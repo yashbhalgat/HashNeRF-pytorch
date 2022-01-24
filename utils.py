@@ -49,18 +49,17 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
     return (torch.tensor(min_bound), torch.tensor(max_bound))
 
 
-def get_voxel_vertices(xyz, bounding_box, log2_res, log2_hashmap_size):
+def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
     '''
     xyz: 3D coordinates of samples. B x 3
     bounding_box: min and max x,y,z coordinates of object bbox
-    logres: log (base 2) of number of voxels per axis
+    resolution: number of voxels per axis
     '''
-    resolution = 2**log2_res
     box_min, box_max = bounding_box
 
     if not torch.all(xyz < box_max) or not torch.all(xyz > box_min):
-        print("ALERT: some points are outside the bounding box!")
-        pdb.set_trace()
+        print("ALERT: some points are outside bounding box. Clipping them!")
+        xyz = torch.clamp(xyz, min=box_min, max=box_max)
 
     grid_size = (box_max-box_min)/resolution
     

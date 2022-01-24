@@ -51,14 +51,17 @@ class PositionalEmbedder:
 
 class HashEmbedder(nn.Module):
     def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
-                log2_hashmap_size=19, base_resolution=16):
+                log2_hashmap_size=19, base_resolution=16, finest_resolution=1024):
         super(HashEmbedder, self).__init__()
         self.bounding_box = bounding_box
         self.n_levels = n_levels
         self.n_features_per_level = n_features_per_level
         self.log2_hashmap_size = log2_hashmap_size
-        self.base_resolution = base_resolution
+        self.base_resolution = torch.tensor(base_resolution)
+        self.finest_resolution = torch.tensor(finest_resolution)
         self.out_dim = self.n_levels * self.n_features_per_level
+
+        self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
 
         self.embeddings = nn.Embedding(2**self.log2_hashmap_size, \
                                         self.n_features_per_level)
@@ -87,17 +90,16 @@ class HashEmbedder(nn.Module):
         # step 3
         c = c0*(1-weights[:,2][:,None]) + c1*weights[:,2][:,None]
 
-        print("Check dimensions of 'c' = B x 2")
         return c
 
     def forward(self, x):
         # x is 3D point position: B x 3
         x_embedded_all = []
         for i in range(self.n_levels):
-            log2_res = self.base_resolution + i
+            resolution = torch.floor(self.base_resolution * self.b**i)
             voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices = get_voxel_vertices(\
                                                 x, self.bounding_box, \
-                                                log2_res, self.log2_hashmap_size)
+                                                resolution, self.log2_hashmap_size)
             
             voxel_embedds = self.embeddings(hashed_voxel_indices)
 
