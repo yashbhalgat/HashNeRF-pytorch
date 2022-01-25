@@ -180,18 +180,31 @@ def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
     embed_fn, input_ch = get_embedder(args.multires, args.bounding_box, i=args.i_embed)
-
+    
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
         # use positional encoding
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.bounding_box, i=0)
+        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.bounding_box, i=2)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
-    model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+
+    if args.i_embed:
+        model = NeRFSmall(num_layers=2,
+                        hidden_dim=64,
+                        geo_feat_dim=15,
+                        num_layers_color=3,
+                        hidden_dim_color=64,
+                        input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+        args.N_importance = 0  # no fine model needed
+    else:
+        model = NeRF(D=args.netdepth, W=args.netwidth,
+                    input_ch=input_ch, output_ch=output_ch, skips=skips,
+                    input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
     grad_vars = list(model.parameters())
+    if args.i_embed==1:
+        # add embeddings to optimizer parameters
+        grad_vars += list(embed_fn.parameters())
 
     model_fine = None
     if args.N_importance > 0:
@@ -233,6 +246,8 @@ def create_nerf(args):
         model.load_state_dict(ckpt['network_fn_state_dict'])
         if model_fine is not None:
             model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+        if args.i_embed==1:
+            embed_fn.load_state_dict(ckpt['embed_fn_state_dict'])
 
     ##########################
 
@@ -243,6 +258,7 @@ def create_nerf(args):
         'network_fine' : model_fine,
         'N_samples' : args.N_samples,
         'network_fn' : model,
+        'embed_fn': embed_fn,
         'use_viewdirs' : args.use_viewdirs,
         'white_bkgd' : args.white_bkgd,
         'raw_noise_std' : args.raw_noise_std,
@@ -311,6 +327,7 @@ def render_rays(ray_batch,
                 network_fn,
                 network_query_fn,
                 N_samples,
+                embed_fn=None,
                 retraw=False,
                 lindisp=False,
                 perturb=0.,
@@ -381,7 +398,6 @@ def render_rays(ray_batch,
         z_vals = lower + (upper - lower) * t_rand
 
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
-
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
@@ -781,6 +797,7 @@ def train():
             psnr0 = mse2psnr(img_loss0)
 
         loss.backward()
+        # pdb.set_trace()
         optimizer.step()
 
         # NOTE: IMPORTANT!
@@ -799,12 +816,20 @@ def train():
         # Rest is logging
         if i%args.i_weights==0:
             path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
-            torch.save({
-                'global_step': global_step,
-                'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
-                'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-            }, path)
+            if args.i_embed==1:
+                torch.save({
+                    'global_step': global_step,
+                    'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                    'embed_fn_state_dict': render_kwargs_train['embed_fn'].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, path)
+            else:
+                torch.save({
+                    'global_step': global_step,
+                    'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                    'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, path)
             print('Saved checkpoints at', path)
 
         if i%args.i_video==0 and i > 0:

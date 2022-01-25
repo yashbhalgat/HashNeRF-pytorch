@@ -46,7 +46,7 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
             find_min_max(min_point)
             find_min_max(max_point)
 
-    return (torch.tensor(min_bound), torch.tensor(max_bound))
+    return (torch.tensor(min_bound)-torch.tensor([1.0,1.0,1.0]), torch.tensor(max_bound)+torch.tensor([1.0,1.0,1.0]))
 
 
 def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
@@ -58,7 +58,8 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
     box_min, box_max = bounding_box
 
     if not torch.all(xyz < box_max) or not torch.all(xyz > box_min):
-        print("ALERT: some points are outside bounding box. Clipping them!")
+        # print("ALERT: some points are outside bounding box. Clipping them!")
+        pdb.set_trace()
         xyz = torch.clamp(xyz, min=box_min, max=box_max)
 
     grid_size = (box_max-box_min)/resolution

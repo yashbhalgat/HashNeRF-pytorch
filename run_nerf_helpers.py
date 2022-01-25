@@ -49,6 +49,90 @@ class PositionalEmbedder:
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
+class SHEncoder(nn.Module):
+    def __init__(self, input_dim=3, degree=4):
+    
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.degree = degree
+
+        assert self.input_dim == 3
+        assert self.degree >= 1 and self.degree <= 5
+
+        self.out_dim = degree ** 2
+
+        self.C0 = 0.28209479177387814
+        self.C1 = 0.4886025119029199
+        self.C2 = [
+            1.0925484305920792,
+            -1.0925484305920792,
+            0.31539156525252005,
+            -1.0925484305920792,
+            0.5462742152960396
+        ]
+        self.C3 = [
+            -0.5900435899266435,
+            2.890611442640554,
+            -0.4570457994644658,
+            0.3731763325901154,
+            -0.4570457994644658,
+            1.445305721320277,
+            -0.5900435899266435
+        ]
+        self.C4 = [
+            2.5033429417967046,
+            -1.7701307697799304,
+            0.9461746957575601,
+            -0.6690465435572892,
+            0.10578554691520431,
+            -0.6690465435572892,
+            0.47308734787878004,
+            -1.7701307697799304,
+            0.6258357354491761
+        ]
+
+    def forward(self, input, **kwargs):
+
+        result = torch.empty((*input.shape[:-1], self.out_dim), dtype=input.dtype, device=input.device)
+        x, y, z = input.unbind(-1)
+
+        result[..., 0] = self.C0
+        if self.degree > 1:
+            result[..., 1] = -self.C1 * y
+            result[..., 2] = self.C1 * z
+            result[..., 3] = -self.C1 * x
+            if self.degree > 2:
+                xx, yy, zz = x * x, y * y, z * z
+                xy, yz, xz = x * y, y * z, x * z
+                result[..., 4] = self.C2[0] * xy
+                result[..., 5] = self.C2[1] * yz
+                result[..., 6] = self.C2[2] * (2.0 * zz - xx - yy)
+                #result[..., 6] = self.C2[2] * (3.0 * zz - 1) # xx + yy + zz == 1, but this will lead to different backward gradients, interesting...
+                result[..., 7] = self.C2[3] * xz
+                result[..., 8] = self.C2[4] * (xx - yy)
+                if self.degree > 3:
+                    result[..., 9] = self.C3[0] * y * (3 * xx - yy)
+                    result[..., 10] = self.C3[1] * xy * z
+                    result[..., 11] = self.C3[2] * y * (4 * zz - xx - yy)
+                    result[..., 12] = self.C3[3] * z * (2 * zz - 3 * xx - 3 * yy)
+                    result[..., 13] = self.C3[4] * x * (4 * zz - xx - yy)
+                    result[..., 14] = self.C3[5] * z * (xx - yy)
+                    result[..., 15] = self.C3[6] * x * (xx - 3 * yy)
+                    if self.degree > 4:
+                        result[..., 16] = self.C4[0] * xy * (xx - yy)
+                        result[..., 17] = self.C4[1] * yz * (3 * xx - yy)
+                        result[..., 18] = self.C4[2] * xy * (7 * zz - 1)
+                        result[..., 19] = self.C4[3] * yz * (7 * zz - 3)
+                        result[..., 20] = self.C4[4] * (zz * (35 * zz - 30) + 3)
+                        result[..., 21] = self.C4[5] * xz * (7 * zz - 3)
+                        result[..., 22] = self.C4[6] * (xx - yy) * (7 * zz - 1)
+                        result[..., 23] = self.C4[7] * xz * (xx - 3 * yy)
+                        result[..., 24] = self.C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))
+
+        return result
+
+
 class HashEmbedder(nn.Module):
     def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
                 log2_hashmap_size=19, base_resolution=16, finest_resolution=1024):
@@ -65,6 +149,8 @@ class HashEmbedder(nn.Module):
 
         self.embeddings = nn.Embedding(2**self.log2_hashmap_size, \
                                         self.n_features_per_level)
+        # custom uniform initialization
+        nn.init.uniform_(self.embeddings.weight, a=-0.0001, b=0.0001)
         
     def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
         '''
@@ -124,10 +210,14 @@ def get_embedder(multires, bounding_box, i=0):
         
         embedder_obj = PositionalEmbedder(**embed_kwargs)
         embed = lambda x, eo=embedder_obj : eo.embed(x)
+        out_dim = embedder_obj.out_dim
     elif i == 1:
-        embedder_obj = HashEmbedder(bounding_box=bounding_box)
-        embed = lambda x, eo=embedder_obj : eo(x)
-    return embed, embedder_obj.out_dim
+        embed = HashEmbedder(bounding_box=bounding_box)
+        out_dim = embed.out_dim
+    elif i==2:
+        embed = SHEncoder()
+        out_dim = embed.out_dim
+    return embed, out_dim
 
 
 # Model
@@ -156,19 +246,22 @@ class NeRF(nn.Module):
         if use_viewdirs:
             self.feature_linear = nn.Linear(W, W)
             self.alpha_linear = nn.Linear(W, 1)
-            self.rgb_linear = nn.Linear(W//2, 3)
+            self.rgb_linear = nn.Sequential(
+                                nn.Linear(W//2, 3),
+                                nn.Sigmoid())
         else:
             self.output_linear = nn.Linear(W, output_ch)
 
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
         h = input_pts
+        pdb.set_trace()
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h)
             h = F.relu(h)
             if i in self.skips:
                 h = torch.cat([input_pts, h], -1)
-
+        pdb.set_trace()
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
             feature = self.feature_linear(h)
@@ -183,37 +276,88 @@ class NeRF(nn.Module):
         else:
             outputs = self.output_linear(h)
 
-        return outputs    
+        return outputs
 
-    def load_weights_from_keras(self, weights):
-        assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
+
+# Small NeRF for Hash embeddings
+class NeRFSmall(nn.Module):
+    def __init__(self,
+                 num_layers=3,
+                 hidden_dim=64,
+                 geo_feat_dim=15,
+                 num_layers_color=4,
+                 hidden_dim_color=64,
+                 input_ch=3, input_ch_views=3,
+                 ):
+        super(NeRFSmall, self).__init__()
+
+        self.input_ch = input_ch
+        self.input_ch_views = input_ch_views
+
+        # sigma network
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+        self.geo_feat_dim = geo_feat_dim
+
+        sigma_net = []
+        for l in range(num_layers):
+            if l == 0:
+                in_dim = self.input_ch
+            else:
+                in_dim = hidden_dim
+            
+            if l == num_layers - 1:
+                out_dim = 1 + self.geo_feat_dim # 1 sigma + 15 SH features for color
+            else:
+                out_dim = hidden_dim
+            
+            sigma_net.append(nn.Linear(in_dim, out_dim, bias=False))
+
+        self.sigma_net = nn.ModuleList(sigma_net)
+
+        # color network
+        self.num_layers_color = num_layers_color        
+        self.hidden_dim_color = hidden_dim_color
         
-        # Load pts_linears
-        for i in range(self.D):
-            idx_pts_linears = 2 * i
-            self.pts_linears[i].weight.data = torch.from_numpy(np.transpose(weights[idx_pts_linears]))    
-            self.pts_linears[i].bias.data = torch.from_numpy(np.transpose(weights[idx_pts_linears+1]))
+        color_net =  []
+        for l in range(num_layers_color):
+            if l == 0:
+                in_dim = self.input_ch_views + self.geo_feat_dim
+            else:
+                in_dim = hidden_dim
+            
+            if l == num_layers_color - 1:
+                out_dim = 3 # 3 rgb
+            else:
+                out_dim = hidden_dim
+            
+            color_net.append(nn.Linear(in_dim, out_dim, bias=False))
+
+        self.color_net = nn.ModuleList(color_net)
+    
+    def forward(self, x):
+        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
+
+        # sigma
+        h = input_pts
+        for l in range(self.num_layers):
+            h = self.sigma_net[l](h)
+            if l != self.num_layers - 1:
+                h = F.relu(h, inplace=True)
+
+        sigma, geo_feat = h[..., 0], h[..., 1:]
         
-        # Load feature_linear
-        idx_feature_linear = 2 * self.D
-        self.feature_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_feature_linear]))
-        self.feature_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_feature_linear+1]))
+        # color
+        h = torch.cat([input_views, geo_feat], dim=-1)
+        for l in range(self.num_layers_color):
+            h = self.color_net[l](h)
+            if l != self.num_layers_color - 1:
+                h = F.relu(h, inplace=True)
+            
+        color = torch.sigmoid(h)
+        outputs = torch.cat([color, sigma.unsqueeze(dim=-1)], -1)
 
-        # Load views_linears
-        idx_views_linears = 2 * self.D + 2
-        self.views_linears[0].weight.data = torch.from_numpy(np.transpose(weights[idx_views_linears]))
-        self.views_linears[0].bias.data = torch.from_numpy(np.transpose(weights[idx_views_linears+1]))
-
-        # Load rgb_linear
-        idx_rbg_linear = 2 * self.D + 4
-        self.rgb_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear]))
-        self.rgb_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear+1]))
-
-        # Load alpha_linear
-        idx_alpha_linear = 2 * self.D + 6
-        self.alpha_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear]))
-        self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear+1]))
-
+        return outputs
 
 
 # Ray helpers
