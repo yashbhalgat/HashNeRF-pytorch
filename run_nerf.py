@@ -179,24 +179,24 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
-    embed_fn, input_ch = get_embedder(args.multires, args.bounding_box, i=args.i_embed)
+    embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
     
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
         # use positional encoding
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.bounding_box, i=2)
+        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=0)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
 
-    if args.i_embed:
+    if args.i_embed==1:
         model = NeRFSmall(num_layers=2,
                         hidden_dim=64,
                         geo_feat_dim=15,
                         num_layers_color=3,
                         hidden_dim_color=64,
                         input_ch=input_ch, input_ch_views=input_ch_views).to(device)
-        args.N_importance = 0  # no fine model needed
+        # args.N_importance = 0  # no fine model needed
     else:
         model = NeRF(D=args.netdepth, W=args.netwidth,
                     input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -204,13 +204,21 @@ def create_nerf(args):
     grad_vars = list(model.parameters())
     if args.i_embed==1:
         # add embeddings to optimizer parameters
-        grad_vars += list(embed_fn.parameters())
+        embedding_params = list(embed_fn.parameters())
 
     model_fine = None
     if args.N_importance > 0:
-        model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+        if args.i_embed==1:
+            model_fine = NeRFSmall(num_layers=2,
+                            hidden_dim=64,
+                            geo_feat_dim=15,
+                            num_layers_color=3,
+                            hidden_dim_color=64,
+                            input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+        else:
+            model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
+                            input_ch=input_ch, output_ch=output_ch, skips=skips,
+                            input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
         grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
@@ -219,7 +227,13 @@ def create_nerf(args):
                                                                 netchunk=args.netchunk)
 
     # Create optimizer
-    optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+    if args.i_embed==1:
+        optimizer = torch.optim.Adam([
+                            {'params': grad_vars, 'weight_decay': 1e-6},
+                            {'params': embedding_params}
+                        ], lr=args.lrate, betas=(0.9, 0.99), eps=1e-15)
+    else:
+        optimizer = torch.optim.Adam(grad_vars, lr=args.lrate, betas=(0.9, 0.999))
 
     start = 0
     basedir = args.basedir
@@ -460,7 +474,7 @@ def config_parser():
                         help='channels per layer in fine network')
     parser.add_argument("--N_rand", type=int, default=32*32*4, 
                         help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--lrate", type=float, default=1e-2, 
+    parser.add_argument("--lrate", type=float, default=5e-4, 
                         help='learning rate')
     parser.add_argument("--lrate_decay", type=int, default=250, 
                         help='exponential learning rate decay (in 1000 steps)')
@@ -545,6 +559,11 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video",   type=int, default=50000, 
                         help='frequency of render_poses video saving')
+    
+    parser.add_argument("--finest_res",   type=int, default=512, 
+                        help='finest resolultion for hashed embedding')
+    parser.add_argument("--log2_hashmap_size",   type=int, default=19, 
+                        help='log2 of hashmap size')
 
     return parser
 
@@ -647,6 +666,8 @@ def train():
         args.expname += "_positional"
     elif args.i_embed==1:
         args.expname += "_hashed"
+        args.expname += "_finest"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
+    args.expname += "_decay"+str(args.lrate_decay) + "_lr"+str(args.lrate)
     expname = args.expname
 
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -797,7 +818,7 @@ def train():
             psnr0 = mse2psnr(img_loss0)
 
         loss.backward()
-        # pdb.set_trace()
+        pdb.set_trace()
         optimizer.step()
 
         # NOTE: IMPORTANT!
@@ -860,7 +881,7 @@ def train():
 
     
         if i%args.i_print==0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}  lrate: {new_lrate}")
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))

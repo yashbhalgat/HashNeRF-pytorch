@@ -135,7 +135,7 @@ class SHEncoder(nn.Module):
 
 class HashEmbedder(nn.Module):
     def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
-                log2_hashmap_size=19, base_resolution=16, finest_resolution=1024):
+                log2_hashmap_size=19, base_resolution=16, finest_resolution=512):
         super(HashEmbedder, self).__init__()
         self.bounding_box = bounding_box
         self.n_levels = n_levels
@@ -196,7 +196,7 @@ class HashEmbedder(nn.Module):
         return torch.cat(x_embedded_all, dim=-1)
 
 
-def get_embedder(multires, bounding_box, i=0):
+def get_embedder(multires, args, i=0):
     if i == -1:
         return nn.Identity(), 3
     elif i == 0:
@@ -213,7 +213,9 @@ def get_embedder(multires, bounding_box, i=0):
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
     elif i == 1:
-        embed = HashEmbedder(bounding_box=bounding_box)
+        embed = HashEmbedder(bounding_box=args.bounding_box, \
+                            log2_hashmap_size=args.log2_hashmap_size, \
+                            finest_resolution=args.finest_res)
         out_dim = embed.out_dim
     elif i==2:
         embed = SHEncoder()
@@ -256,13 +258,12 @@ class NeRF(nn.Module):
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
         h = input_pts
-        pdb.set_trace()
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h)
             h = F.relu(h)
             if i in self.skips:
                 h = torch.cat([input_pts, h], -1)
-        pdb.set_trace()
+        
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
             feature = self.feature_linear(h)
