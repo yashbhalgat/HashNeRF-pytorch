@@ -147,10 +147,11 @@ class HashEmbedder(nn.Module):
 
         self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
 
-        self.embeddings = nn.Embedding(2**self.log2_hashmap_size, \
-                                        self.n_features_per_level)
+        self.embeddings = nn.ModuleList([nn.Embedding(2**self.log2_hashmap_size, \
+                                        self.n_features_per_level) for i in range(n_levels)])
         # custom uniform initialization
-        nn.init.uniform_(self.embeddings.weight, a=-0.0001, b=0.0001)
+        for i in range(n_levels):
+            nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)
         
     def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
         '''
@@ -187,7 +188,7 @@ class HashEmbedder(nn.Module):
                                                 x, self.bounding_box, \
                                                 resolution, self.log2_hashmap_size)
             
-            voxel_embedds = self.embeddings(hashed_voxel_indices)
+            voxel_embedds = self.embeddings[i](hashed_voxel_indices)
 
             x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
             x_embedded_all.append(x_embedded)
@@ -367,6 +368,7 @@ def get_rays(H, W, K, c2w):
     j = j.t()
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
+    # pdb.set_trace()
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = c2w[:3,-1].expand(rays_d.shape)
