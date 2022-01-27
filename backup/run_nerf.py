@@ -19,7 +19,7 @@ from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
 from load_LINEMOD import load_LINEMOD_data
 
-
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
 DEBUG = False
@@ -95,7 +95,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     """
     if c2w is not None:
         # special case to render full image
-        rays_o, rays_d = get_rays(H, W, K, c2w)
+        rays_o, rays_d = get_rays(H, W, K, c2w, device=device)
     else:
         # use provided ray batch
         rays_o, rays_d = rays
@@ -105,7 +105,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         viewdirs = rays_d
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
+            rays_o, rays_d = get_rays(H, W, K, c2w_staticcam, device=device)
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = torch.reshape(viewdirs, [-1,3]).float()
 
@@ -180,19 +180,15 @@ def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
     embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
-    if args.i_embed==1:
-        # hashed embedding table
-        embedding_params = list(embed_fn.parameters())
-
+    
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
-        # if using hashed for xyz, use SH for views
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
-    
+        # use positional encoding
+        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=0)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
-    
+
     if args.i_embed==1:
         model = NeRFSmall(num_layers=2,
                         hidden_dim=64,
@@ -200,29 +196,29 @@ def create_nerf(args):
                         num_layers_color=3,
                         hidden_dim_color=64,
                         input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+        # args.N_importance = 0  # no fine model needed
     else:
         model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                    input_ch=input_ch, output_ch=output_ch, skips=skips,
+                    input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
     grad_vars = list(model.parameters())
+    if args.i_embed==1:
+        # add embeddings to optimizer parameters
+        embedding_params = list(embed_fn.parameters())
 
     model_fine = None
-
-    # if args.i_embed==1:
-    #     args.N_importance = 0
-
     if args.N_importance > 0:
         if args.i_embed==1:
             model_fine = NeRFSmall(num_layers=2,
-                        hidden_dim=64,
-                        geo_feat_dim=15,
-                        num_layers_color=3,
-                        hidden_dim_color=64,
-                        input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+                            hidden_dim=64,
+                            geo_feat_dim=15,
+                            num_layers_color=3,
+                            hidden_dim_color=64,
+                            input_ch=input_ch, input_ch_views=input_ch_views).to(device)
         else:
             model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                            input_ch=input_ch, output_ch=output_ch, skips=skips,
+                            input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
         grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
@@ -234,10 +230,10 @@ def create_nerf(args):
     if args.i_embed==1:
         optimizer = torch.optim.Adam([
                             {'params': grad_vars, 'weight_decay': 1e-6},
-                            {'params': embedding_params, 'eps': 1e-15}
-                        ], lr=args.lrate, betas=(0.9, 0.99))
+                            {'params': embedding_params}
+                        ], lr=args.lrate, betas=(0.9, 0.99), eps=1e-15)
     else:
-        optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+        optimizer = torch.optim.Adam(grad_vars, lr=args.lrate, betas=(0.9, 0.999))
 
     start = 0
     basedir = args.basedir
@@ -268,7 +264,6 @@ def create_nerf(args):
             embed_fn.load_state_dict(ckpt['embed_fn_state_dict'])
 
     ##########################
-    # pdb.set_trace()
 
     render_kwargs_train = {
         'network_query_fn' : network_query_fn,
@@ -418,7 +413,6 @@ def render_rays(ray_batch,
 
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
-
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
@@ -505,9 +499,7 @@ def config_parser():
     parser.add_argument("--use_viewdirs", action='store_true', 
                         help='use full 5D input instead of 3D')
     parser.add_argument("--i_embed", type=int, default=1, 
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--i_embed_views", type=int, default=2, 
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
+                        help='set 1 for default hashed embedding, 0 for positional encoding, -1 for none')
     parser.add_argument("--multires", type=int, default=10, 
                         help='log2 of max freq for positional encoding (3D location)')
     parser.add_argument("--multires_views", type=int, default=4, 
@@ -567,7 +559,7 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video",   type=int, default=50000, 
                         help='frequency of render_poses video saving')
-
+    
     parser.add_argument("--finest_res",   type=int, default=512, 
                         help='finest resolultion for hashed embedding')
     parser.add_argument("--log2_hashmap_size",   type=int, default=19, 
@@ -670,16 +662,12 @@ def train():
 
     # Create log dir and copy the config file
     basedir = args.basedir
-    if args.i_embed==1:
-        args.expname += "_hashXYZ"
-    elif args.i_embed==0:
-        args.expname += "_posXYZ"
-    if args.i_embed_views==2:
-        args.expname += "_sphereVIEW"
-    elif args.i_embed_views==0:
-        args.expname += "_posVIEW"
-    args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
-    args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
+    if args.i_embed==0:
+        args.expname += "_positional"
+    elif args.i_embed==1:
+        args.expname += "_hashed"
+        args.expname += "_finest"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
+    args.expname += "_decay"+str(args.lrate_decay) + "_lr"+str(args.lrate)
     expname = args.expname
 
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -734,7 +722,7 @@ def train():
     if use_batching:
         # For random ray batching
         print('get rays')
-        rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
+        rays = np.stack([get_rays_np(H, W, K, p, device=device) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
         print('done, concats')
         rays_rgb = np.concatenate([rays, images[:,None]], 1) # [N, ro+rd+rgb, H, W, 3]
         rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
@@ -790,7 +778,7 @@ def train():
             pose = poses[img_i, :3,:4]
 
             if N_rand is not None:
-                rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
+                rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose), device=device)  # (H, W, 3), (H, W, 3)
 
                 if i < args.precrop_iters:
                     dH = int(H//2 * args.precrop_frac)
@@ -837,6 +825,7 @@ def train():
         ###   update learning rate   ###
         decay_rate = 0.1
         decay_steps = args.lrate_decay * 1000
+        # pdb.set_trace()
         new_lrate = args.lrate * (decay_rate ** (global_step / decay_steps))
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
@@ -853,7 +842,6 @@ def train():
                 torch.save({
                     'global_step': global_step,
                     'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
-                    'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
                     'embed_fn_state_dict': render_kwargs_train['embed_fn'].state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                 }, path)
@@ -893,7 +881,7 @@ def train():
 
     
         if i%args.i_print==0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}  lrate: {new_lrate}")
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))

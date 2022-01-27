@@ -1,10 +1,13 @@
+from turtle import forward
 import torch
 # torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import pdb
 
-from hash_encoding import HashEmbedder, SHEncoder
+from utils import get_voxel_vertices
+
 
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
@@ -13,7 +16,7 @@ to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
 
 # Positional encoding (section 5.1)
-class Embedder:
+class PositionalEmbedder:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.create_embedding_fn()
@@ -46,10 +49,157 @@ class Embedder:
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
+class SHEncoder(nn.Module):
+    def __init__(self, input_dim=3, degree=4):
+    
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.degree = degree
+
+        assert self.input_dim == 3
+        assert self.degree >= 1 and self.degree <= 5
+
+        self.out_dim = degree ** 2
+
+        self.C0 = 0.28209479177387814
+        self.C1 = 0.4886025119029199
+        self.C2 = [
+            1.0925484305920792,
+            -1.0925484305920792,
+            0.31539156525252005,
+            -1.0925484305920792,
+            0.5462742152960396
+        ]
+        self.C3 = [
+            -0.5900435899266435,
+            2.890611442640554,
+            -0.4570457994644658,
+            0.3731763325901154,
+            -0.4570457994644658,
+            1.445305721320277,
+            -0.5900435899266435
+        ]
+        self.C4 = [
+            2.5033429417967046,
+            -1.7701307697799304,
+            0.9461746957575601,
+            -0.6690465435572892,
+            0.10578554691520431,
+            -0.6690465435572892,
+            0.47308734787878004,
+            -1.7701307697799304,
+            0.6258357354491761
+        ]
+
+    def forward(self, input, **kwargs):
+
+        result = torch.empty((*input.shape[:-1], self.out_dim), dtype=input.dtype, device=input.device)
+        x, y, z = input.unbind(-1)
+
+        result[..., 0] = self.C0
+        if self.degree > 1:
+            result[..., 1] = -self.C1 * y
+            result[..., 2] = self.C1 * z
+            result[..., 3] = -self.C1 * x
+            if self.degree > 2:
+                xx, yy, zz = x * x, y * y, z * z
+                xy, yz, xz = x * y, y * z, x * z
+                result[..., 4] = self.C2[0] * xy
+                result[..., 5] = self.C2[1] * yz
+                result[..., 6] = self.C2[2] * (2.0 * zz - xx - yy)
+                #result[..., 6] = self.C2[2] * (3.0 * zz - 1) # xx + yy + zz == 1, but this will lead to different backward gradients, interesting...
+                result[..., 7] = self.C2[3] * xz
+                result[..., 8] = self.C2[4] * (xx - yy)
+                if self.degree > 3:
+                    result[..., 9] = self.C3[0] * y * (3 * xx - yy)
+                    result[..., 10] = self.C3[1] * xy * z
+                    result[..., 11] = self.C3[2] * y * (4 * zz - xx - yy)
+                    result[..., 12] = self.C3[3] * z * (2 * zz - 3 * xx - 3 * yy)
+                    result[..., 13] = self.C3[4] * x * (4 * zz - xx - yy)
+                    result[..., 14] = self.C3[5] * z * (xx - yy)
+                    result[..., 15] = self.C3[6] * x * (xx - 3 * yy)
+                    if self.degree > 4:
+                        result[..., 16] = self.C4[0] * xy * (xx - yy)
+                        result[..., 17] = self.C4[1] * yz * (3 * xx - yy)
+                        result[..., 18] = self.C4[2] * xy * (7 * zz - 1)
+                        result[..., 19] = self.C4[3] * yz * (7 * zz - 3)
+                        result[..., 20] = self.C4[4] * (zz * (35 * zz - 30) + 3)
+                        result[..., 21] = self.C4[5] * xz * (7 * zz - 3)
+                        result[..., 22] = self.C4[6] * (xx - yy) * (7 * zz - 1)
+                        result[..., 23] = self.C4[7] * xz * (xx - 3 * yy)
+                        result[..., 24] = self.C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))
+
+        return result
+
+
+class HashEmbedder(nn.Module):
+    def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
+                log2_hashmap_size=19, base_resolution=16, finest_resolution=512):
+        super(HashEmbedder, self).__init__()
+        self.bounding_box = bounding_box
+        self.n_levels = n_levels
+        self.n_features_per_level = n_features_per_level
+        self.log2_hashmap_size = log2_hashmap_size
+        self.base_resolution = torch.tensor(base_resolution)
+        self.finest_resolution = torch.tensor(finest_resolution)
+        self.out_dim = self.n_levels * self.n_features_per_level
+
+        self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
+
+        self.embeddings = nn.ModuleList([nn.Embedding(2**self.log2_hashmap_size, \
+                                        self.n_features_per_level) for i in range(n_levels)])
+        # custom uniform initialization
+        for i in range(n_levels):
+            nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)
+        
+    def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
+        '''
+        x: B x 3
+        voxel_min_vertex: B x 3
+        voxel_max_vertex: B x 3
+        voxel_embedds: B x 8 x 2
+        '''
+        # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
+        weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex) # B x 3
+
+        # step 1
+        # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
+        c00 = voxel_embedds[:,0]*(1-weights[:,0][:,None]) + voxel_embedds[:,4]*weights[:,0][:,None]
+        c01 = voxel_embedds[:,1]*(1-weights[:,0][:,None]) + voxel_embedds[:,5]*weights[:,0][:,None]
+        c10 = voxel_embedds[:,2]*(1-weights[:,0][:,None]) + voxel_embedds[:,6]*weights[:,0][:,None]
+        c11 = voxel_embedds[:,3]*(1-weights[:,0][:,None]) + voxel_embedds[:,7]*weights[:,0][:,None]
+
+        # step 2
+        c0 = c00*(1-weights[:,1][:,None]) + c10*weights[:,1][:,None]
+        c1 = c01*(1-weights[:,1][:,None]) + c11*weights[:,1][:,None]
+
+        # step 3
+        c = c0*(1-weights[:,2][:,None]) + c1*weights[:,2][:,None]
+
+        return c
+
+    def forward(self, x):
+        # x is 3D point position: B x 3
+        x_embedded_all = []
+        for i in range(self.n_levels):
+            resolution = torch.floor(self.base_resolution * self.b**i)
+            voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices = get_voxel_vertices(\
+                                                x, self.bounding_box, \
+                                                resolution, self.log2_hashmap_size)
+            
+            voxel_embedds = self.embeddings[i](hashed_voxel_indices)
+
+            x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
+            x_embedded_all.append(x_embedded)
+
+        return torch.cat(x_embedded_all, dim=-1)
+
+
 def get_embedder(multires, args, i=0):
     if i == -1:
         return nn.Identity(), 3
-    elif i==0:
+    elif i == 0:
         embed_kwargs = {
                     'include_input' : True,
                     'input_dims' : 3,
@@ -59,10 +209,10 @@ def get_embedder(multires, args, i=0):
                     'periodic_fns' : [torch.sin, torch.cos],
         }
         
-        embedder_obj = Embedder(**embed_kwargs)
+        embedder_obj = PositionalEmbedder(**embed_kwargs)
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
-    elif i==1:
+    elif i == 1:
         embed = HashEmbedder(bounding_box=args.bounding_box, \
                             log2_hashmap_size=args.log2_hashmap_size, \
                             finest_resolution=args.finest_res)
@@ -99,7 +249,9 @@ class NeRF(nn.Module):
         if use_viewdirs:
             self.feature_linear = nn.Linear(W, W)
             self.alpha_linear = nn.Linear(W, 1)
-            self.rgb_linear = nn.Linear(W//2, 3)
+            self.rgb_linear = nn.Sequential(
+                                nn.Linear(W//2, 3),
+                                nn.Sigmoid())
         else:
             self.output_linear = nn.Linear(W, output_ch)
 
@@ -111,7 +263,7 @@ class NeRF(nn.Module):
             h = F.relu(h)
             if i in self.skips:
                 h = torch.cat([input_pts, h], -1)
-
+        
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
             feature = self.feature_linear(h)
@@ -126,36 +278,7 @@ class NeRF(nn.Module):
         else:
             outputs = self.output_linear(h)
 
-        return outputs    
-
-    def load_weights_from_keras(self, weights):
-        assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
-        
-        # Load pts_linears
-        for i in range(self.D):
-            idx_pts_linears = 2 * i
-            self.pts_linears[i].weight.data = torch.from_numpy(np.transpose(weights[idx_pts_linears]))    
-            self.pts_linears[i].bias.data = torch.from_numpy(np.transpose(weights[idx_pts_linears+1]))
-        
-        # Load feature_linear
-        idx_feature_linear = 2 * self.D
-        self.feature_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_feature_linear]))
-        self.feature_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_feature_linear+1]))
-
-        # Load views_linears
-        idx_views_linears = 2 * self.D + 2
-        self.views_linears[0].weight.data = torch.from_numpy(np.transpose(weights[idx_views_linears]))
-        self.views_linears[0].bias.data = torch.from_numpy(np.transpose(weights[idx_views_linears+1]))
-
-        # Load rgb_linear
-        idx_rbg_linear = 2 * self.D + 4
-        self.rgb_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear]))
-        self.rgb_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear+1]))
-
-        # Load alpha_linear
-        idx_alpha_linear = 2 * self.D + 6
-        self.alpha_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear]))
-        self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear+1]))
+        return outputs
 
 
 # Small NeRF for Hash embeddings
@@ -233,19 +356,17 @@ class NeRFSmall(nn.Module):
             if l != self.num_layers_color - 1:
                 h = F.relu(h, inplace=True)
             
-        # color = torch.sigmoid(h)
-        color = h
+        color = torch.sigmoid(h)
         outputs = torch.cat([color, sigma.unsqueeze(dim=-1)], -1)
 
         return outputs
 
 
-
 # Ray helpers
-def get_rays(H, W, K, c2w):
+def get_rays(H, W, K, c2w, device):
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
-    i = i.t()
-    j = j.t()
+    i = i.t().to(device)
+    j = j.t().to(device)
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
