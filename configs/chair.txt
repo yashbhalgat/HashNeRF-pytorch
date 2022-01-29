@@ -1,4 +1,4 @@
-expname = blender_paper_chair
+expname = blender_chair
 basedir = ./logs
 datadir = ./data/nerf_synthetic/chair
 dataset_type = blender

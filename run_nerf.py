@@ -1,4 +1,5 @@
 import os, sys
+from datetime import datetime
 import numpy as np
 import imageio
 import json
@@ -9,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm, trange
+import pickle
 
 import matplotlib.pyplot as plt
 
@@ -561,7 +563,7 @@ def config_parser():
                         help='frequency of console printout and metric loggin')
     parser.add_argument("--i_img",     type=int, default=500, 
                         help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=10000, 
+    parser.add_argument("--i_weights", type=int, default=1000, 
                         help='frequency of weight ckpt saving')
     parser.add_argument("--i_testset", type=int, default=50000, 
                         help='frequency of testset saving')
@@ -680,6 +682,7 @@ def train():
         args.expname += "_posVIEW"
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
+    args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
     expname = args.expname
 
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -764,10 +767,12 @@ def train():
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
     
+    loss_list = []
+    psnr_list = []
+    time_list = []
     start = start + 1
+    time0 = time.time()
     for i in trange(start, N_iters):
-        time0 = time.time()
-
         # Sample random ray batch
         if use_batching:
             # Random over all images
@@ -842,7 +847,7 @@ def train():
             param_group['lr'] = new_lrate
         ################################
 
-        dt = time.time()-time0
+        t = time.time()-time0
         # print(f"Step: {global_step}, Loss: {loss}, Time: {dt}")
         #####           end            #####
 
@@ -894,6 +899,16 @@ def train():
     
         if i%args.i_print==0:
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            loss_list.append(loss.item())
+            psnr_list.append(psnr.item())
+            time_list.append(t)
+            loss_psnr_time = {
+                "losses": loss_list,
+                "psnr": psnr_list,
+                "time": time_list
+            }
+            with open(os.path.join(basedir, expname, "loss_vs_time.pkl"), "wb") as fp:
+                pickle.dump(loss_psnr_time, fp)
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))
