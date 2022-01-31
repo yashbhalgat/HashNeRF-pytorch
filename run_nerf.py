@@ -682,9 +682,9 @@ def train():
         args.expname += "_posVIEW"
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
-    args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
-    expname = args.expname
-
+    #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
+    expname = args.expname   
+ 
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
     f = os.path.join(basedir, expname, 'args.txt')
     with open(f, 'w') as file:
