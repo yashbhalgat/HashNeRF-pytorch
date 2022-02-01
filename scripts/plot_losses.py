@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import pdb
 
 paths = {
-         "Vanilla HighLR": "../logs/blender_chair_posXYZ_posVIEW_fine1024_log2T19_lr0.01_decay100/loss_vs_time.pkl", \
-         "Hashed HighLR": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay100/loss_vs_time.pkl", \
-         "Hashed SlowLR": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.0005_decay500/loss_vs_time.pkl", \
+         #"Vanilla HighLR": "../logs/blender_chair_posXYZ_posVIEW_fine1024_log2T19_lr0.01_decay100/loss_vs_time.pkl", \
+         "Hashed Fast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay100/loss_vs_time.pkl", \
+         "Hashed Superfast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10/loss_vs_time.pkl", \
          "Vanilla SlowLR": "../logs/blender_chair_posXYZ_posVIEW_fine1024_log2T19_lr0.0005_decay500/loss_vs_time.pkl"}
 
 # load data
