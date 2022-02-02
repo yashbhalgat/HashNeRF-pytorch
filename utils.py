@@ -5,13 +5,17 @@ import torch
 
 from ray_utils import get_rays, get_ray_directions
 
+BOX_OFFSETS = torch.tensor([[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]],
+    dtype=torch.int32, device='cuda')  # (1, 8, 3)
+
 
 def hash(coords, log2_hashmap_size):
     '''
     coords: 3D coordinates. B x 3
     log2T:  logarithm of T w.r.t 2
     '''
-    x, y, z = coords[:,0], coords[:,1], coords[:,2]
+    # x, y, z = coords[:,0], coords[:,1], coords[:,2]
+    x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
     return ((1<<log2_hashmap_size)-1) & (x*73856093 ^ y*19349663 ^ z*83492791)
 
 
@@ -49,7 +53,7 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
     return (torch.tensor(min_bound)-torch.tensor([1.0,1.0,1.0]), torch.tensor(max_bound)+torch.tensor([1.0,1.0,1.0]))
 
 
-def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
+def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size, num_hashes):
     '''
     xyz: 3D coordinates of samples. B x 3
     bounding_box: min and max x,y,z coordinates of object bbox
@@ -68,15 +72,31 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
     voxel_min_vertex = bottom_left_idx*grid_size + box_min
     voxel_max_vertex = voxel_min_vertex + torch.tensor([1.0,1.0,1.0])*grid_size
 
-    hashed_voxel_indices = [] # B x 8 ... 000,001,010,011,100,101,110,111
-    for i in [0, 1]:
-        for j in [0, 1]:
-            for k in [0, 1]:
-                vertex_idx = bottom_left_idx + torch.tensor([i,j,k])
-                # vertex = bottom_left + torch.tensor([i,j,k])*grid_size
-                hashed_voxel_indices.append(hash(vertex_idx, log2_hashmap_size))
-                
-    return voxel_min_vertex, voxel_max_vertex, torch.stack(hashed_voxel_indices, dim=1)
+    # # The more readable, un-optimized code
+    # all_hashed_voxel_indices = [] # B x 8 x num_hashes (the 8 is 000,001,010,011,100,101,110,111)
+    # for n in range(num_hashes):
+    #     hashed_voxel_indices = []
+    #     for i in [0, 1]:
+    #         for j in [0, 1]:
+    #             for k in [0, 1]:
+    #                 vertex_idx = bottom_left_idx + torch.tensor([i,j,k])  # vertex indices
+    #                 vertex_idx = vertex_idx + n * 53  # offset depending on n, note 53 is random
+    #                 # vertex = bottom_left + torch.tensor([i,j,k])*grid_size
+    #                 hashed_voxel_indices.append(hash(vertex_idx, log2_hashmap_size))
+    #     hashed_voxel_indices = torch.stack(hashed_voxel_indices, dim=1)
+    #     all_hashed_voxel_indices.append(hashed_voxel_indices)
+    # all_hashed_voxel_indices = torch.stack(all_hashed_voxel_indices, dim=-1)
+
+    # # The faster code with only a single hash, for ease of reading
+    # bottom_left_idxs = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS  # (B, 8, 3) box coordinates
+    # hashed_voxel_indices = hash(bottom_left_idxs, log2_hashmap_size)
+
+    # The faster code with multiple hashes
+    bottom_left_idxs = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS  # (B, 8, 3) box coordinates
+    bottom_left_idxs = bottom_left_idxs.unsqueeze(2) + torch.arange(num_hashes).reshape(1, 1, num_hashes, 1) * 53  # add offset for different hash fns
+    all_hashed_voxel_indices = hash(bottom_left_idxs, log2_hashmap_size)  # (B, 8, num_hashes) integer embedding indices 
+
+    return voxel_min_vertex, voxel_max_vertex, all_hashed_voxel_indices
 
 
 

@@ -570,10 +570,15 @@ def config_parser():
     parser.add_argument("--i_video",   type=int, default=50000, 
                         help='frequency of render_poses video saving')
 
+    # New hash options
     parser.add_argument("--finest_res",   type=int, default=512, 
                         help='finest resolultion for hashed embedding')
     parser.add_argument("--log2_hashmap_size",   type=int, default=19, 
                         help='log2 of hashmap size')
+
+    # New options
+    parser.add_argument("--num_hashes", type=int, default=1, 
+                        help='Number of hashes (for power of two choices)')
 
     return parser
 
@@ -683,6 +688,8 @@ def train():
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
+    if args.num_hashes > 1:
+        args.expname += f'_nhash_{args.num_hashes}'
     expname = args.expname   
  
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)

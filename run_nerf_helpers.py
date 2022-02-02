@@ -65,8 +65,8 @@ def get_embedder(multires, args, i=0):
     elif i==1:
         embed = HashEmbedder(bounding_box=args.bounding_box, \
                             log2_hashmap_size=args.log2_hashmap_size, \
-                            finest_resolution=args.finest_res)
-        out_dim = embed.out_dim
+                            finest_resolution=args.finest_res, num_hashes=args.num_hashes)
+        out_dim = embed.out_dim * args.num_hashes
     elif i==2:
         embed = SHEncoder()
         out_dim = embed.out_dim
