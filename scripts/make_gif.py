@@ -9,9 +9,7 @@ import numpy as np
 image_idx = "000"
 
 paths = {
-         "Vanilla Slow": "../logs/blender_chair_posXYZ_posVIEW_fine1024_log2T19_lr0.0005_decay500", \
-         "Hashed Superfast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10", \
-         "Hashed Fast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay100"}
+         "Hashed": "../logs/blender_hotdog_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10"}
 
 for path_name, log_path in paths.items():
     folders = [name for name in os.listdir(log_path) if name.startswith("renderonly_path_")]
