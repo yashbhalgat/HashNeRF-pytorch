@@ -9,9 +9,12 @@ import numpy as np
 image_idx = "000"
 
 paths = {
-         "Vanilla Slow": "../logs/blender_chair_posXYZ_posVIEW_fine1024_log2T19_lr0.0005_decay500", \
-         "Hashed Superfast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10", \
-         "Hashed Fast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay100"}
+    # "Vanilla Slow": "../logs/blender_chair_posXYZ_posVIEW_fine1024_log2T19_lr0.0005_decay500", \
+    # "Hashed Superfast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10", \
+    # "Hashed Fast": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay100"
+    "1Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10",
+    "2Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10_po2c",
+}
 
 for path_name, log_path in paths.items():
     folders = [name for name in os.listdir(log_path) if name.startswith("renderonly_path_")]
@@ -33,6 +36,6 @@ for path_name, log_path in paths.items():
         )
         images.append(img)
         writer.append_data(np.array(img))
-    pdb.set_trace()
-    writer.close()
-    #imageio.mimsave(os.path.join(log_path, 'convergence_dur025.gif'), images, duration=0.25)
+    # pdb.set_trace()
+    # writer.close()
+    imageio.mimsave(os.path.join(log_path, 'convergence_dur025.gif'), images, duration=0.25)
