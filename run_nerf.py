@@ -23,8 +23,9 @@ from load_LINEMOD import load_LINEMOD_data
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
 DEBUG = False
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
 
 
 def batchify(fn, chunk):
@@ -325,7 +326,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
         # Overwrite randomly sampled data if pytest
         if pytest:
-            np.random.seed(0)
+            np.random.seed(RANDOM_SEED)
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
@@ -412,7 +413,7 @@ def render_rays(ray_batch,
 
         # Pytest, overwrite u with numpy's fixed random numbers
         if pytest:
-            np.random.seed(0)
+            np.random.seed(RANDOM_SEED)
             t_rand = np.random.rand(*list(z_vals.shape))
             t_rand = torch.Tensor(t_rand)
 
@@ -579,6 +580,12 @@ def config_parser():
     # New options
     parser.add_argument("--num_hashes", type=int, default=1, 
                         help='Number of hashes (for power of two choices)')
+    parser.add_argument("--pool_over_hashes", action='store_true', 
+                        help='Apply maximum function over hashes, like a Bloom Filter')
+    
+    # Misc new options
+    parser.add_argument("--wandb", action='store_true', 
+                        help='Weights and biases logging')
 
     return parser
 
@@ -587,6 +594,11 @@ def train():
 
     parser = config_parser()
     args = parser.parse_args()
+
+    # Logging
+    if args.wandb:
+        import wandb
+        wandb.init(name=None, job_type='train', config=args, save_code=True, project='hashnerf')
 
     # Load data
     K = None
@@ -690,6 +702,8 @@ def train():
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
     if args.num_hashes > 1:
         args.expname += f'_nhash_{args.num_hashes}'
+        if args.pool_over_hashes:
+            args.expname += f'_pool'
     expname = args.expname   
  
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -845,6 +859,10 @@ def train():
         # pdb.set_trace()
         optimizer.step()
 
+        if args.wandb:
+            import wandb
+            wandb.init(name=None, job_type='train', config=args, save_code=True, project='hashnerf')
+
         # NOTE: IMPORTANT!
         ###   update learning rate   ###
         decay_rate = 0.1
@@ -916,6 +934,7 @@ def train():
             }
             with open(os.path.join(basedir, expname, "loss_vs_time.pkl"), "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
+        
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))

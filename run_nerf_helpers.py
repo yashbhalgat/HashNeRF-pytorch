@@ -65,8 +65,11 @@ def get_embedder(multires, args, i=0):
     elif i==1:
         embed = HashEmbedder(bounding_box=args.bounding_box, \
                             log2_hashmap_size=args.log2_hashmap_size, \
-                            finest_resolution=args.finest_res, num_hashes=args.num_hashes)
-        out_dim = embed.out_dim * args.num_hashes
+                            finest_resolution=args.finest_res, 
+                            num_hashes=args.num_hashes,
+                            pool_over_hashes=args.pool_over_hashes)
+        effective_num_hashes = (1 if args.pool_over_hashes else args.num_hashes)
+        out_dim = embed.out_dim * effective_num_hashes
     elif i==2:
         embed = SHEncoder()
         out_dim = embed.out_dim
@@ -301,6 +304,7 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
 
     # Pytest, overwrite u with numpy's fixed random numbers
     if pytest:
+        print('PYTEST!')
         np.random.seed(0)
         new_shape = list(cdf.shape[:-1]) + [N_samples]
         if det:

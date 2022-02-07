@@ -9,7 +9,8 @@ from utils import get_voxel_vertices
 
 class HashEmbedder(nn.Module):
     def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
-                log2_hashmap_size=19, base_resolution=16, finest_resolution=512, num_hashes=1):
+                log2_hashmap_size=19, base_resolution=16, finest_resolution=512, 
+                num_hashes=1, pool_over_hashes=False):
         super(HashEmbedder, self).__init__()
         self.bounding_box = bounding_box
         self.n_levels = n_levels
@@ -18,7 +19,10 @@ class HashEmbedder(nn.Module):
         self.base_resolution = torch.tensor(base_resolution)
         self.finest_resolution = torch.tensor(finest_resolution)
         self.out_dim = self.n_levels * self.n_features_per_level
+        
+        # Multiple hashing
         self.num_hashes = num_hashes
+        self.pool_over_hashes = pool_over_hashes
 
         self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
 
@@ -68,11 +72,19 @@ class HashEmbedder(nn.Module):
                 x, self.bounding_box, resolution, self.log2_hashmap_size, self.num_hashes)
 
             # Get the embeddings from the hash table
-            voxel_embedds = self.embeddings[i](all_hashed_voxel_indices)  # (N_rays, 8, D, num_hashes)
+            voxel_embedds = self.embeddings[i](all_hashed_voxel_indices)  # (N_rays, 8, num_hashes, D)
+
+            import pdb
+            pdb.set_trace()
+
+            # Pool over embeddings
+            if self.pool_over_hashes:
+                voxel_embedds = torch.max(voxel_embedds, dim=-2, keepdim=True).values  # (N_rays, 8, 1, D)
 
             # Flatten all the hashed embeddings together
-            voxel_embedds = torch.flatten(voxel_embedds, start_dim=2, end_dim=3)
+            voxel_embedds = torch.flatten(voxel_embedds, start_dim=2, end_dim=3)  # (N_rays, 8, num_hashes * D)
 
+            # Trilinear interpolation
             x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
             x_embedded_all.append(x_embedded)
 
