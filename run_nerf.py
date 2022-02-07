@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
 from optimizer import MultiOptimizer
+from loss import sigma_sparsity_loss, total_variation_loss
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -65,7 +66,7 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
             if k not in all_ret:
                 all_ret[k] = []
             all_ret[k].append(ret[k])
-
+    
     all_ret = {k : torch.cat(all_ret[k], 0) for k in all_ret}
     return all_ret
 
@@ -333,6 +334,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
+    sigma_loss = sigma_sparsity_loss(raw[...,3])
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
@@ -345,7 +347,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
 
-    return rgb_map, disp_map, acc_map, weights, depth_map
+    return rgb_map, disp_map, acc_map, weights, depth_map, sigma_loss
 
 
 def render_rays(ray_batch,
@@ -427,11 +429,11 @@ def render_rays(ray_batch,
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, sigma_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
-        rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
+        rgb_map_0, disp_map_0, acc_map_0, sigma_loss_0 = rgb_map, disp_map, acc_map, sigma_loss
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
@@ -444,15 +446,16 @@ def render_rays(ray_batch,
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+        rgb_map, disp_map, acc_map, weights, depth_map, sigma_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
-    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
+    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map, 'sigma_loss': sigma_loss}
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
         ret['rgb0'] = rgb_map_0
         ret['disp0'] = disp_map_0
         ret['acc0'] = acc_map_0
+        ret['sigma_loss0'] = sigma_loss_0
         ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
@@ -567,18 +570,22 @@ def config_parser():
                         help='frequency of console printout and metric loggin')
     parser.add_argument("--i_img",     type=int, default=500, 
                         help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=1000, 
+    parser.add_argument("--i_weights", type=int, default=10000, 
                         help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=50000, 
+    parser.add_argument("--i_testset", type=int, default=1000, 
                         help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=50000, 
+    parser.add_argument("--i_video",   type=int, default=1000, 
                         help='frequency of render_poses video saving')
 
     parser.add_argument("--finest_res",   type=int, default=512, 
                         help='finest resolultion for hashed embedding')
     parser.add_argument("--log2_hashmap_size",   type=int, default=19, 
                         help='log2 of hashmap size')
-
+    parser.add_argument("--sigma-sparse-weight", type=float, default=1e-10,
+                        help='learning rate')
+    parser.add_argument("--tv-loss-weight", type=float, default=1e-4,
+                        help='learning rate')
+ 
     return parser
 
 
@@ -687,6 +694,9 @@ def train():
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
     args.expname += "_sparseopt"
+    if args.sigma_sparse_weight > 0:
+        args.expname += "_sparsesig" + str(args.sigma_sparse_weight)
+    args.expname += "_TV" + str(args.tv_loss_weight)
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
     expname = args.expname   
  
@@ -763,7 +773,7 @@ def train():
         rays_rgb = torch.Tensor(rays_rgb).to(device)
 
 
-    N_iters = 200000 + 1
+    N_iters = 50000 + 1
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -839,6 +849,21 @@ def train():
             loss = loss + img_loss0
             psnr0 = mse2psnr(img_loss0)
 
+        sigma_loss = args.sigma_sparse_weight*(extras["sigma_loss"].sum() + extras["sigma_loss0"].sum())
+        loss = loss + sigma_loss
+       
+        # add Total Variation loss
+        if args.i_embed==1:
+            n_levels = render_kwargs_train["embed_fn"].n_levels
+            min_res = render_kwargs_train["embed_fn"].base_resolution
+            max_res = render_kwargs_train["embed_fn"].finest_resolution
+            log2_hashmap_size = render_kwargs_train["embed_fn"].log2_hashmap_size
+            TV_loss = sum(total_variation_loss(render_kwargs_train["embed_fn"].embeddings[i], \
+                                              min_res, max_res, \
+                                              i, log2_hashmap_size, \
+                                              n_levels=n_levels) for i in range(n_levels))
+            loss = loss + args.tv_loss_weight * TV_loss
+ 
         loss.backward()
         # pdb.set_trace()
         optimizer.step()
@@ -914,48 +939,7 @@ def train():
             }
             with open(os.path.join(basedir, expname, "loss_vs_time.pkl"), "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
-        """
-            print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
-            print('iter time {:.05f}'.format(dt))
-
-            with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_print):
-                tf.contrib.summary.scalar('loss', loss)
-                tf.contrib.summary.scalar('psnr', psnr)
-                tf.contrib.summary.histogram('tran', trans)
-                if args.N_importance > 0:
-                    tf.contrib.summary.scalar('psnr0', psnr0)
-
-
-            if i%args.i_img==0:
-
-                # Log a rendered validation view to Tensorboard
-                img_i=np.random.choice(i_val)
-                target = images[img_i]
-                pose = poses[img_i, :3,:4]
-                with torch.no_grad():
-                    rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
-                                                        **render_kwargs_test)
-
-                psnr = mse2psnr(img2mse(rgb, target))
-
-                with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
-
-                    tf.contrib.summary.image('rgb', to8b(rgb)[tf.newaxis])
-                    tf.contrib.summary.image('disp', disp[tf.newaxis,...,tf.newaxis])
-                    tf.contrib.summary.image('acc', acc[tf.newaxis,...,tf.newaxis])
-
-                    tf.contrib.summary.scalar('psnr_holdout', psnr)
-                    tf.contrib.summary.image('rgb_holdout', target[tf.newaxis])
-
-
-                if args.N_importance > 0:
-
-                    with tf.contrib.summary.record_summaries_every_n_global_steps(args.i_img):
-                        tf.contrib.summary.image('rgb0', to8b(extras['rgb0'])[tf.newaxis])
-                        tf.contrib.summary.image('disp0', extras['disp0'][tf.newaxis,...,tf.newaxis])
-                        tf.contrib.summary.image('z_std', extras['z_std'][tf.newaxis,...,tf.newaxis])
-        """
-
+        
         global_step += 1
 
 
