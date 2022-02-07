@@ -27,7 +27,7 @@ class HashEmbedder(nn.Module):
         self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
 
         self.embeddings = nn.ModuleList([nn.Embedding(2**self.log2_hashmap_size, \
-                                        self.n_features_per_level) for i in range(n_levels)])
+                                        self.n_features_per_level, sparse=True) for i in range(n_levels)])
         # custom uniform initialization
         for i in range(n_levels):
             nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)

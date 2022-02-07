@@ -15,6 +15,7 @@ import pickle
 import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
+from optimizer import MultiOptimizer
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -235,10 +236,13 @@ def create_nerf(args):
 
     # Create optimizer
     if args.i_embed==1:
-        optimizer = torch.optim.Adam([
-                            {'params': grad_vars, 'weight_decay': 1e-6},
-                            {'params': embedding_params, 'eps': 1e-15}
-                        ], lr=args.lrate, betas=(0.9, 0.99))
+        sparse_opt = torch.optim.SparseAdam(embedding_params, lr=args.lrate, betas=(0.9, 0.99), eps=1e-15)
+        dense_opt = torch.optim.Adam(grad_vars, lr=args.lrate, betas=(0.9, 0.99), weight_decay=1e-6)
+        optimizer = MultiOptimizer(optimizers={"sparse_opt": sparse_opt, "dense_opt": dense_opt})
+        # optimizer = torch.optim.Adam([
+        #                     {'params': grad_vars, 'weight_decay': 1e-6},
+        #                     {'params': embedding_params, 'eps': 1e-15}
+        #                 ], lr=args.lrate, betas=(0.9, 0.99))
     else:
         optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
 
@@ -699,6 +703,7 @@ def train():
         args.expname += "_posVIEW"
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
+    args.expname += "_sparseopt"
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
     if args.num_hashes > 1:
         args.expname += f'_nhash_{args.num_hashes}'
