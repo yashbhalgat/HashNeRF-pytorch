@@ -19,9 +19,14 @@ from torchvision.utils import make_grid
 import pickle
 
 paths = {
-    "1Hash_slr": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.0005_decay500/loss_vs_time.pkl",
+    # "1Hash_slr": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.0005_decay500/loss_vs_time.pkl",
+    # "1Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10/loss_vs_time.pkl",
+    # "2Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10_po2c/loss_vs_time.pkl",
+    # --------
     "1Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10/loss_vs_time.pkl",
-    "2Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10_po2c/loss_vs_time.pkl",
+    "2Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10_nhash_2/loss_vs_time.pkl",
+    "3Hash": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10_nhash_3/loss_vs_time.pkl",
+    "3HashPool": "../logs/blender_chair_hashXYZ_sphereVIEW_fine1024_log2T19_lr0.01_decay10_nhash_3_pool/loss_vs_time.pkl",
 }
 # load data
 data_dict = {}
