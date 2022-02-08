@@ -67,7 +67,8 @@ def get_embedder(multires, args, i=0):
                             log2_hashmap_size=args.log2_hashmap_size, \
                             finest_resolution=args.finest_res, 
                             num_hashes=args.num_hashes,
-                            pool_over_hashes=args.pool_over_hashes)
+                            pool_over_hashes=args.pool_over_hashes,
+                            which_hash=args.which_hash)
         effective_num_hashes = (1 if args.pool_over_hashes else args.num_hashes)
         out_dim = embed.out_dim * effective_num_hashes
     elif i==2:

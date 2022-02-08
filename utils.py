@@ -9,7 +9,7 @@ BOX_OFFSETS = torch.tensor([[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0
     dtype=torch.int32, device='cuda')  # (1, 8, 3)
 
 
-def hash(coords, log2_hashmap_size):
+def yash_hash(coords, log2_hashmap_size):
     '''
     coords: 3D coordinates. B x 3
     log2T:  logarithm of T w.r.t 2
@@ -17,6 +17,18 @@ def hash(coords, log2_hashmap_size):
     # x, y, z = coords[:,0], coords[:,1], coords[:,2]
     x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
     return ((1<<log2_hashmap_size)-1) & (x*73856093 ^ y*19349663 ^ z*83492791)
+
+
+def ngp_hash(coords, log2_hashmap_size):
+    # Question from Luke: Why not use primes for the hash? Isn't that important?
+    # https://github.com/NVlabs/tiny-cuda-nn/blob/ece9cdd88601a3e754ef82de11dd0114008d0fbc/include/tiny-cuda-nn/encodings/grid.h#L72
+    x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
+    return ((1<<log2_hashmap_size)-1) & (x ^ (y * 2654435761) ^ (z * 805459861))
+
+
+def non_hash(coords, log2_hashmap_size, resolution):
+    x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
+    return (x + y * resolution + z * resolution * resolution) % (2 ** log2_hashmap_size)
 
 
 def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
@@ -53,7 +65,7 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
     return (torch.tensor(min_bound)-torch.tensor([1.0,1.0,1.0]), torch.tensor(max_bound)+torch.tensor([1.0,1.0,1.0]))
 
 
-def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size, num_hashes):
+def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size, num_hashes, which_hash='yash'):
     '''
     xyz: 3D coordinates of samples. B x 3
     bounding_box: min and max x,y,z coordinates of object bbox
@@ -94,7 +106,18 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size, num_has
     # The faster code with multiple hashes
     bottom_left_idxs = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS  # (B, 8, 3) box coordinates
     bottom_left_idxs = bottom_left_idxs.unsqueeze(2) + torch.arange(num_hashes).reshape(1, 1, num_hashes, 1) * 53  # add offset for different hash fns
-    all_hashed_voxel_indices = hash(bottom_left_idxs, log2_hashmap_size)  # (B, 8, num_hashes) integer embedding indices 
+    
+    # Hash
+    if which_hash == 'yash':
+        all_hashed_voxel_indices = yash_hash(bottom_left_idxs, log2_hashmap_size)  # (B, 8, num_hashes) integer embedding indices 
+    elif which_hash == 'ngp':
+        all_hashed_voxel_indices = ngp_hash(bottom_left_idxs, log2_hashmap_size)  # (B, 8, num_hashes) integer embedding indices 
+    elif which_hash == 'nonhash':
+        all_hashed_voxel_indices = non_hash(bottom_left_idxs, log2_hashmap_size, resolution)  # (B, 8, num_hashes) integer embedding indices 
+    elif which_hash == 'debug':
+        all_hashed_voxel_indices = yash_hash(bottom_left_idxs * 0, log2_hashmap_size)  # (B, 8, num_hashes) integer embedding indices 
+    else:
+        raise ValueError(which_hash)
 
     return voxel_min_vertex, voxel_max_vertex, all_hashed_voxel_indices
 

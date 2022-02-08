@@ -7,89 +7,6 @@ import pdb
 
 from utils import get_voxel_vertices
 
-class HashEmbedder(nn.Module):
-    def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
-                log2_hashmap_size=19, base_resolution=16, finest_resolution=512, 
-                num_hashes=1, pool_over_hashes=False):
-        super(HashEmbedder, self).__init__()
-        self.bounding_box = bounding_box
-        self.n_levels = n_levels
-        self.n_features_per_level = n_features_per_level
-        self.log2_hashmap_size = log2_hashmap_size
-        self.base_resolution = torch.tensor(base_resolution)
-        self.finest_resolution = torch.tensor(finest_resolution)
-        self.out_dim = self.n_levels * self.n_features_per_level
-        
-        # Multiple hashing
-        self.num_hashes = num_hashes
-        self.pool_over_hashes = pool_over_hashes
-
-        self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
-
-        self.embeddings = nn.ModuleList([nn.Embedding(2**self.log2_hashmap_size, \
-                                        self.n_features_per_level, sparse=True) for i in range(n_levels)])
-        # custom uniform initialization
-        for i in range(n_levels):
-            nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)
-            # self.embeddings[i].weight.data.zero_()
-        
-
-    def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
-        '''
-        x: B x 3
-        voxel_min_vertex: B x 3
-        voxel_max_vertex: B x 3
-        voxel_embedds: B x 8 x 2
-        '''
-        # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
-        weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex) # B x 3
-
-        # step 1
-        # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
-        c00 = voxel_embedds[:,0]*(1-weights[:,0][:,None]) + voxel_embedds[:,4]*weights[:,0][:,None]
-        c01 = voxel_embedds[:,1]*(1-weights[:,0][:,None]) + voxel_embedds[:,5]*weights[:,0][:,None]
-        c10 = voxel_embedds[:,2]*(1-weights[:,0][:,None]) + voxel_embedds[:,6]*weights[:,0][:,None]
-        c11 = voxel_embedds[:,3]*(1-weights[:,0][:,None]) + voxel_embedds[:,7]*weights[:,0][:,None]
-
-        # step 2
-        c0 = c00*(1-weights[:,1][:,None]) + c10*weights[:,1][:,None]
-        c1 = c01*(1-weights[:,1][:,None]) + c11*weights[:,1][:,None]
-
-        # step 3
-        c = c0*(1-weights[:,2][:,None]) + c1*weights[:,2][:,None]
-
-        return c
-
-    def forward(self, x):
-        # x is 3D point position: B x 3
-        x_embedded_all = []
-        for i in range(self.n_levels):
-            resolution = torch.floor(self.base_resolution * self.b**i)
-
-            # Get the indices using our hash function
-            # `all_hashed_voxel_indices` has size (N_rays, 8, num_hashes)
-            voxel_min_vertex, voxel_max_vertex, all_hashed_voxel_indices = get_voxel_vertices(\
-                x, self.bounding_box, resolution, self.log2_hashmap_size, self.num_hashes)
-
-            # Get the embeddings from the hash table
-            voxel_embedds = self.embeddings[i](all_hashed_voxel_indices)  # (N_rays, 8, num_hashes, D)
-
-            import pdb
-            pdb.set_trace()
-
-            # Pool over embeddings
-            if self.pool_over_hashes:
-                voxel_embedds = torch.max(voxel_embedds, dim=-2, keepdim=True).values  # (N_rays, 8, 1, D)
-
-            # Flatten all the hashed embeddings together
-            voxel_embedds = torch.flatten(voxel_embedds, start_dim=2, end_dim=3)  # (N_rays, 8, num_hashes * D)
-
-            # Trilinear interpolation
-            x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
-            x_embedded_all.append(x_embedded)
-
-        return torch.cat(x_embedded_all, dim=-1)
-
 
 class SHEncoder(nn.Module):
     def __init__(self, input_dim=3, degree=4):
@@ -173,3 +90,200 @@ class SHEncoder(nn.Module):
                         result[..., 24] = self.C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))
 
         return result
+
+
+class HashEmbedder(nn.Module):
+    def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
+                log2_hashmap_size=19, base_resolution=16, finest_resolution=512, 
+                num_hashes=1, pool_over_hashes=False, which_hash='yash'):
+        super(HashEmbedder, self).__init__()
+        self.bounding_box = bounding_box
+        self.n_levels = n_levels
+        self.n_features_per_level = n_features_per_level
+        self.log2_hashmap_size = log2_hashmap_size
+        self.base_resolution = torch.tensor(base_resolution)
+        self.finest_resolution = torch.tensor(finest_resolution)
+        self.out_dim = self.n_levels * self.n_features_per_level
+        
+        # Hashing parameters
+        self.num_hashes = num_hashes
+        self.pool_over_hashes = pool_over_hashes
+        self.which_hash = which_hash
+
+        self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
+
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(2**self.log2_hashmap_size, self.n_features_per_level, sparse=True) 
+            for i in range(n_levels)
+        ])
+
+        # Custom initialization
+        for i in range(n_levels):
+            nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)  # uniform
+            # self.embeddings[i].weight.data.zero_()  # zero
+        
+
+    def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
+        '''
+        x: B x 3
+        voxel_min_vertex: B x 3
+        voxel_max_vertex: B x 3
+        voxel_embedds: B x 8 x 2
+        '''
+        # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
+        weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex) # B x 3
+
+        # step 1
+        # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
+        c00 = voxel_embedds[:,0]*(1-weights[:,0][:,None]) + voxel_embedds[:,4]*weights[:,0][:,None]
+        c01 = voxel_embedds[:,1]*(1-weights[:,0][:,None]) + voxel_embedds[:,5]*weights[:,0][:,None]
+        c10 = voxel_embedds[:,2]*(1-weights[:,0][:,None]) + voxel_embedds[:,6]*weights[:,0][:,None]
+        c11 = voxel_embedds[:,3]*(1-weights[:,0][:,None]) + voxel_embedds[:,7]*weights[:,0][:,None]
+
+        # step 2
+        c0 = c00*(1-weights[:,1][:,None]) + c10*weights[:,1][:,None]
+        c1 = c01*(1-weights[:,1][:,None]) + c11*weights[:,1][:,None]
+
+        # step 3
+        c = c0*(1-weights[:,2][:,None]) + c1*weights[:,2][:,None]
+
+        return c
+
+    # Old sequential forward
+    def forward(self, x):
+        # x is 3D point position: B x 3
+        x_embedded_all = []
+        for i in range(self.n_levels):
+            resolution = torch.floor(self.base_resolution * self.b**i).int().item()
+
+            # Get the indices using our hash function
+            # `all_hashed_voxel_indices` has size (N_rays, 8, num_hashes)
+            voxel_min_vertex, voxel_max_vertex, all_hashed_voxel_indices = get_voxel_vertices(
+                x, self.bounding_box, resolution, self.log2_hashmap_size, self.num_hashes, self.which_hash)
+
+            # Get the embeddings from the hash table
+            voxel_embedds = self.embeddings[i](all_hashed_voxel_indices)  # (N_rays, 8, num_hashes, D)
+
+            # Pool over embeddings
+            if self.pool_over_hashes:
+                voxel_embedds = torch.max(voxel_embedds, dim=-2, keepdim=True).values  # (N_rays, 8, 1, D)
+
+            # Flatten all the hashed embeddings together
+            voxel_embedds = torch.flatten(voxel_embedds, start_dim=2, end_dim=3)  # (N_rays, 8, num_hashes * D)
+
+            # Trilinear interpolation
+            x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
+            x_embedded_all.append(x_embedded)
+
+        x_embedded_all = torch.cat(x_embedded_all, dim=-1)
+        return x_embedded_all
+
+
+# class ParallelHashEmbedder(nn.Module):
+#     def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
+#                 log2_hashmap_size=19, base_resolution=16, finest_resolution=512, 
+#                 num_hashes=1, pool_over_hashes=False, which_hash='yash'):
+#         super(HashEmbedder, self).__init__()
+#         self.bounding_box = bounding_box
+#         self.n_levels = n_levels
+#         self.n_features_per_level = n_features_per_level
+#         self.log2_hashmap_size = log2_hashmap_size
+#         self.base_resolution = torch.tensor(base_resolution)
+#         self.finest_resolution = torch.tensor(finest_resolution)
+#         self.out_dim = self.n_levels * self.n_features_per_level
+        
+#         # Offsets for boxes
+#         self.box_offsets = torch.tensor(
+#             [[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]],
+#             dtype=torch.int32, device='cuda'
+#         ).reshape(1, 1, 8, 1, 3)
+        
+#         # Hashing
+#         self.num_hashes = num_hashes
+#         self.pool_over_hashes = pool_over_hashes
+#         self.hash_offsets = torch.arange(num_hashes).reshape(1, 1, num_hashes, 1) * 53  # MAGIC NUMBER
+#         self.which_hash = which_hash
+
+#         # Resolutions
+#         self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
+
+#         # Embedding table: a single huge table
+#         hashmap_size = 2 ** self.log2_hashmap_size
+#         self.embeddings = nn.Embedding(hashmap_size * n_levels, self.n_features_per_level, sparse=True)
+
+#         # Custom uniform initialization
+#         nn.init.uniform_(self.embeddings.weight, a=-0.0001, b=0.0001)
+        
+#     def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
+#         '''
+#         x: (N_levels, N_rays, 3)
+#         voxel_min_vertex: (N_levels, N_rays, 3)
+#         voxel_max_vertex: (N_levels, N_rays, 3)
+#         voxel_embedds: (N_levels, N_rays, 8, 2)
+#         '''
+#         # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
+#         weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex) # (N_levels, N_rays, 3)
+
+#         # step 1
+#         # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
+#         c00 = voxel_embedds[:,:,0]*(1-weights[:,:,0][:,:,None]) + voxel_embedds[:,:,4]*weights[:,:,0][:,:,None]
+#         c01 = voxel_embedds[:,:,1]*(1-weights[:,:,0][:,:,None]) + voxel_embedds[:,:,5]*weights[:,:,0][:,:,None]
+#         c10 = voxel_embedds[:,:,2]*(1-weights[:,:,0][:,:,None]) + voxel_embedds[:,:,6]*weights[:,:,0][:,:,None]
+#         c11 = voxel_embedds[:,:,3]*(1-weights[:,:,0][:,:,None]) + voxel_embedds[:,:,7]*weights[:,:,0][:,:,None]
+
+#         # step 2
+#         c0 = c00*(1-weights[:,:,1][:,:,None]) + c10*weights[:,:,1][:,:,None]
+#         c1 = c01*(1-weights[:,:,1][:,:,None]) + c11*weights[:,:,1][:,:,None]
+
+#         # step 3
+#         c = c0*(1-weights[:,:,2][:,:,None]) + c1*weights[:,:,2][:,:,None]
+
+#         return c
+
+#     def forward(self, x):
+#         """The input `x` is a batch of 3D point positions: (B, 3)"""
+#         box_min, box_max = self.bounding_box  # (B, 3), (B, 3)
+#         x = x[None]  # (1, N_rays, 3)
+
+#         # Check
+#         if not torch.all(x < box_max) or not torch.all(x > box_min):
+#             print("ALERT: some points are outside bounding box. Clipping them!")
+#             import pdb; pdb.set_trace()
+
+#         # Parallel
+#         resolution = torch.floor(self.base_resolution * self.b ** torch.arange(self.n_levels))  # (N_levels, )
+
+#         ### Get voxel vertex indices
+
+#         # Get grid info
+#         resolution = resolution[:, None, None]  # (N_levels, 1, 1)
+#         box_max = box_max[None, None]  # (1, 1, 3)
+#         box_min = box_min[None, None]  # (1, 1, 3)
+#         grid_size = (box_max - box_min) / resolution  # (N_levels, 1, 3)
+#         bottom_left_idx = ((x - box_min) / grid_size).int()  # (N_levels, N_rays, 3)
+#         voxel_min_vertex = bottom_left_idx * grid_size + box_min  # (N_levels, N_rays, 3)
+#         voxel_max_vertex = voxel_min_vertex + grid_size  # (N_levels, N_rays, 3) -- offset by a single grid coordinate
+
+#         # Parallel code with multiple hashes
+#         bottom_left_idxs = bottom_left_idx[:, :, None, None, :]  # (N_levels, N_rays, 1, 1, 3)
+#         bottom_left_idxs = bottom_left_idxs + self.box_offsets  # (N_levels, N_rays, 8, 1, 3) box coordinates
+#         bottom_left_idxs = bottom_left_idxs + self.hash_offsets  # (N_levels, N_rays, 8, num_hashes, 3) box "coordinates"
+#         all_hashed_voxel_indices = hash(bottom_left_idxs, self.log2_hashmap_size)  # (B, 8, num_hashes) integer embedding indices 
+
+#         # TODO: figure out how to do this in parallel properly!!
+#         # TODO: make this work!
+#         # Get the embeddings from the hash table
+#         voxel_embedds = self.embeddings(all_hashed_voxel_indices)  # (N_levels, N_rays, 8, num_hashes, D)
+        
+#         # Pool over embeddings
+#         if self.pool_over_hashes:
+#             voxel_embedds = torch.max(voxel_embedds, dim=-2, keepdim=True).values  # (N_levels, N_rays, 8, 1, D)
+
+#         # Flatten all the hashed embeddings together
+#         voxel_embedds = torch.flatten(voxel_embedds, start_dim=-2, end_dim=-1)  # (N_levels, N_rays, 8, num_hashes * D)
+
+#         # TODO: Make this work in parallel. This is used to an input of size (N_rays, 8, D), so we could just reshape and reshape
+#         # Trilinear interpolation
+#         x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)  # (N_levels, N_rays, 8, num_hashes * D)
+        
+#         return x_embedded
