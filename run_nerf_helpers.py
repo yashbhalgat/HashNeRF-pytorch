@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from hash_encoding import HashEmbedder, SHEncoder
+from hash_encoding import HashEmbedder, SHEncoder, ParallelHashEmbedder
 
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
@@ -63,12 +63,16 @@ def get_embedder(multires, args, i=0):
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
     elif i==1:
-        embed = HashEmbedder(bounding_box=args.bounding_box, \
-                            log2_hashmap_size=args.log2_hashmap_size, \
-                            finest_resolution=args.finest_res, 
-                            num_hashes=args.num_hashes,
-                            pool_over_hashes=args.pool_over_hashes,
-                            which_hash=args.which_hash)
+        # TODO: TEMP
+        Embedder = ParallelHashEmbedder if args.which_hash.startswith('parallel') else HashEmbedder
+        embed = Embedder(
+            bounding_box=args.bounding_box,
+            log2_hashmap_size=args.log2_hashmap_size,
+            finest_resolution=args.finest_res, 
+            num_hashes=args.num_hashes,
+            pool_over_hashes=args.pool_over_hashes,
+            which_hash=args.which_hash
+        )
         effective_num_hashes = (1 if args.pool_over_hashes else args.num_hashes)
         out_dim = embed.out_dim * effective_num_hashes
     elif i==2:

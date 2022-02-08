@@ -25,6 +25,7 @@ from load_LINEMOD import load_LINEMOD_data
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
+np.random.seed(0)
 
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches.
@@ -584,7 +585,7 @@ def config_parser():
     parser.add_argument("--pool_over_hashes", action='store_true', 
                         help='Apply maximum function over hashes, like a Bloom Filter')
     parser.add_argument("--which_hash", type=str, default='yash', 
-                        choices=['yash', 'ngp', 'nonhash', 'debug'],
+                        choices=['yash', 'ngp', 'nonhash', 'debug', 'parallel_ngp'],
                         help='Which has function to use')
     
     # Misc new options
@@ -602,7 +603,10 @@ def train():
     args = parser.parse_args()
 
     # Seed
+    random.seed(args.seed)
     np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
 
     # Logging
     if args.wandb:
@@ -761,6 +765,12 @@ def train():
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
             return
+
+    # Re-seed
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand

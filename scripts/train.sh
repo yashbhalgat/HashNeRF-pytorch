@@ -26,3 +26,7 @@
 # CUDA_VISIBLE_DEVICES=3 python run_nerf.py --wandb --config configs/chair.txt --finest_res 1024 --lrate 0.01 --lrate_decay 10 --which_hash nonhash --expname blender_chair_non_hash
 # CUDA_VISIBLE_DEVICES=4 python run_nerf.py --wandb --config configs/chair.txt --finest_res 1024 --lrate 0.01 --lrate_decay 10 --which_hash yash --num_hashes 2 --expname blender_chair_yash_hash_2_hash
 # CUDA_VISIBLE_DEVICES=5 python run_nerf.py --wandb --config configs/chair.txt --finest_res 1024 --lrate 0.01 --lrate_decay 10 --which_hash ngp --num_hashes 2 --expname blender_chair_ngp_hash_2_hash
+
+# # Debug parallel work
+CUDA_VISIBLE_DEVICES=0 python run_nerf.py --config configs/chair.txt --finest_res 1024 --lrate 0.01 --lrate_decay 10 --which_hash ngp --num_hashes 2 --expname debug
+CUDA_VISIBLE_DEVICES=5 python run_nerf.py --config configs/chair.txt --finest_res 1024 --lrate 0.01 --lrate_decay 10 --which_hash parallel_ngp --num_hashes 2 --expname debug
