@@ -6,6 +6,7 @@ import numpy as np
 
 from utils import get_voxel_vertices, ngp_hash
 
+
 class SHEncoder(nn.Module):
     def __init__(self, input_dim=3, degree=4):
     
@@ -110,23 +111,20 @@ class HashEmbedder(nn.Module):
 
         self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
 
-        # TODO: DEBUG initialization
+        # Initialization for embeddings
         init_debug_vector = torch.zeros((8388608, 2)).uniform_(-0.0001, 0.0001)
 
+        # Embeddings
         self.embeddings = nn.ModuleList([
             nn.Embedding(2**self.log2_hashmap_size, self.n_features_per_level, sparse=True) 
             for i in range(n_levels)
         ])
 
         # # Custom initialization
-        # for i in range(n_levels):
-        #     nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)  # uniform
-        #     # self.embeddings[i].weight.data.zero_()  # zero
-        
+        init_debug_vector = init_debug_vector.to(self.embeddings[0].weight.device)
         for i in range(n_levels):
             hashmap_size = 2**self.log2_hashmap_size
-            self.embeddings[i].weight.data = init_debug_vector.to(self.embeddings[0].weight.device)[i * hashmap_size: (i+1) * hashmap_size]
-
+            self.embeddings[i].weight.data = init_debug_vector[i * hashmap_size: (i+1) * hashmap_size]
 
     def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
         '''
@@ -181,8 +179,6 @@ class HashEmbedder(nn.Module):
 
         x_embedded_all = torch.cat(x_embedded_all, dim=-1)
 
-        # import pdb; pdb.set_trace()
-
         return x_embedded_all
 
 
@@ -214,7 +210,7 @@ class ParallelHashEmbedder(nn.Module):
         # Resolutions
         self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(n_levels-1))
 
-        # TODO: DEBUG
+        # Initialization
         init_debug_vector = torch.zeros((8388608, 2)).uniform_(-0.0001, 0.0001)
 
         # Embedding table: a single huge table
@@ -222,9 +218,6 @@ class ParallelHashEmbedder(nn.Module):
         self.embeddings = nn.Embedding(self.hashmap_size * n_levels, self.n_features_per_level, sparse=True)
 
         # # Custom uniform initialization
-        # nn.init.uniform_(self.embeddings.weight, a=-0.0001, b=0.0001)
-        # self.embeddings.weight.data.zero_()  # zero
-
         self.embeddings.weight.data = init_debug_vector.to(self.embeddings.weight.device)
 
         
@@ -284,10 +277,6 @@ class ParallelHashEmbedder(nn.Module):
         bottom_left_idxs = bottom_left_idxs + self.hash_offsets  # (N_levels, N_rays, 8, num_hashes, 3) box "coordinates"
         all_hashed_voxel_indices = ngp_hash(bottom_left_idxs, self.log2_hashmap_size)  # N_levels, N_rays, 8, num_hashes) integer embedding indices 
 
-        # import pdb; pdb.set_trace()
-        # # TODO: figure out how to do this in parallel properly!!
-        # # TODO: make this work!
-
         # Get the embeddings from the hash table
         all_hashed_voxel_indices = all_hashed_voxel_indices + torch.arange(self.n_levels).reshape(self.n_levels, 1, 1, 1) * self.hashmap_size  # offset for different levels
         voxel_embedds = self.embeddings(all_hashed_voxel_indices)  # (N_levels, N_rays, 8, num_hashes, D)
@@ -299,13 +288,9 @@ class ParallelHashEmbedder(nn.Module):
         # Flatten all the hashed embeddings together
         voxel_embedds = torch.flatten(voxel_embedds, start_dim=-2, end_dim=-1)  # (N_levels, N_rays, 8, num_hashes * D)
 
-        # TODO: Make this work in parallel. This is used to an input of size (N_rays, 8, D), so we could just reshape and reshape
         # Trilinear interpolation
         x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)  # (N_levels, N_rays, num_hashes * D)
-        # import pdb; pdb.set_trace()
-
+        
         # Reshape and return
         x_embedded = torch.flatten(x_embedded.permute(1, 2, 0), -2, -1)
-        # import pdb; pdb.set_trace()
         return x_embedded
-        

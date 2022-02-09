@@ -14,7 +14,6 @@ def yash_hash(coords, log2_hashmap_size):
     coords: 3D coordinates. B x 3
     log2T:  logarithm of T w.r.t 2
     '''
-    # x, y, z = coords[:,0], coords[:,1], coords[:,2]
     x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
     return ((1<<log2_hashmap_size)-1) & (x*73856093 ^ y*19349663 ^ z*83492791)
 
@@ -103,7 +102,7 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size, num_has
     # bottom_left_idxs = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS  # (B, 8, 3) box coordinates
     # hashed_voxel_indices = hash(bottom_left_idxs, log2_hashmap_size)
 
-    # The faster code with multiple hashes
+    # The faster code with multiple hashes, as desired
     bottom_left_idxs = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS  # (B, 8, 3) box coordinates
     bottom_left_idxs = bottom_left_idxs.unsqueeze(2) + torch.arange(num_hashes).reshape(1, 1, num_hashes, 1) * 53  # add offset for different hash fns
     
@@ -120,7 +119,6 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size, num_has
         raise ValueError(which_hash)
 
     return voxel_min_vertex, voxel_max_vertex, all_hashed_voxel_indices
-
 
 
 if __name__=="__main__":

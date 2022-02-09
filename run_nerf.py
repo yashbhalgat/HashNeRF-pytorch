@@ -9,6 +9,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Categorical
 from tqdm import tqdm, trange
 import pickle
 
@@ -16,6 +17,8 @@ import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
 from optimizer import MultiOptimizer
+from radam import RAdam
+from loss import sigma_sparsity_loss, total_variation_loss
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -64,7 +67,7 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
             if k not in all_ret:
                 all_ret[k] = []
             all_ret[k].append(ret[k])
-
+    
     all_ret = {k : torch.cat(all_ret[k], 0) for k in all_ret}
     return all_ret
 
@@ -234,13 +237,13 @@ def create_nerf(args):
 
     # Create optimizer
     if args.i_embed==1:
-        sparse_opt = torch.optim.SparseAdam(embedding_params, lr=args.lrate, betas=(0.9, 0.99), eps=1e-15)
-        dense_opt = torch.optim.Adam(grad_vars, lr=args.lrate, betas=(0.9, 0.99), weight_decay=1e-6)
-        optimizer = MultiOptimizer(optimizers={"sparse_opt": sparse_opt, "dense_opt": dense_opt})
-        # optimizer = torch.optim.Adam([
-        #                     {'params': grad_vars, 'weight_decay': 1e-6},
-        #                     {'params': embedding_params, 'eps': 1e-15}
-        #                 ], lr=args.lrate, betas=(0.9, 0.99))
+        # sparse_opt = torch.optim.SparseAdam(embedding_params, lr=args.lrate, betas=(0.9, 0.99), eps=1e-15)
+        # dense_opt = torch.optim.Adam(grad_vars, lr=args.lrate, betas=(0.9, 0.99), weight_decay=1e-6)
+        # optimizer = MultiOptimizer(optimizers={"sparse_opt": sparse_opt, "dense_opt": dense_opt})
+        optimizer = RAdam([
+                            {'params': grad_vars, 'weight_decay': 1e-6},
+                            {'params': embedding_params, 'eps': 1e-15}
+                        ], lr=args.lrate, betas=(0.9, 0.99))
     else:
         optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
 
@@ -328,10 +331,11 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
         # Overwrite randomly sampled data if pytest
         if pytest:
-            np.random.seed(RANDOM_SEED)
+            np.random.seed(0)
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
+    # sigma_loss = sigma_sparsity_loss(raw[...,3])
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
@@ -344,7 +348,12 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
 
-    return rgb_map, disp_map, acc_map, weights, depth_map
+    # Calculate weights sparsity loss
+    mask = weights.sum(-1) > 0.5
+    entropy = Categorical(probs = weights+1e-5).entropy()
+    sparsity_loss = entropy * mask
+
+    return rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss
 
 
 def render_rays(ray_batch,
@@ -415,7 +424,7 @@ def render_rays(ray_batch,
 
         # Pytest, overwrite u with numpy's fixed random numbers
         if pytest:
-            np.random.seed(RANDOM_SEED)
+            np.random.seed(0)
             t_rand = np.random.rand(*list(z_vals.shape))
             t_rand = torch.Tensor(t_rand)
 
@@ -424,13 +433,13 @@ def render_rays(ray_batch,
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
 
-#     raw = run_network(pts)
+    # raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
-        rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
+        rgb_map_0, disp_map_0, acc_map_0, sparsity_loss_0 = rgb_map, disp_map, acc_map, sparsity_loss
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
@@ -440,18 +449,19 @@ def render_rays(ray_batch,
         pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
 
         run_fn = network_fn if network_fine is None else network_fine
-#         raw = run_network(pts, fn=run_fn)
+        # raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+        rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
-    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
+    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map, 'sparsity_loss': sparsity_loss}
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
         ret['rgb0'] = rgb_map_0
         ret['disp0'] = disp_map_0
         ret['acc0'] = acc_map_0
+        ret['sparsity_loss0'] = sparsity_loss_0
         ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
@@ -566,11 +576,11 @@ def config_parser():
                         help='frequency of console printout and metric loggin')
     parser.add_argument("--i_img",     type=int, default=500, 
                         help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=1000, 
+    parser.add_argument("--i_weights", type=int, default=10000, 
                         help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=50000, 
+    parser.add_argument("--i_testset", type=int, default=1000, 
                         help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=50000, 
+    parser.add_argument("--i_video",   type=int, default=1000, 
                         help='frequency of render_poses video saving')
 
     # New hash options
@@ -594,6 +604,12 @@ def config_parser():
     parser.add_argument("--wandb", action='store_true', 
                         help='Weights and biases logging')
 
+    # New loss options
+    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
+                        help='learning rate')
+    parser.add_argument("--tv-loss-weight", type=float, default=1e-4,
+                        help='learning rate')
+ 
     return parser
 
 
@@ -712,7 +728,10 @@ def train():
         args.expname += "_posVIEW"
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
-    args.expname += "_sparseopt"
+    args.expname += "_RAdam"
+    if args.sparse_loss_weight > 0:
+        args.expname += "_sparse" + str(args.sparse_loss_weight)
+    args.expname += "_TV" + str(args.tv_loss_weight)
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
     if args.num_hashes > 1:
         args.expname += f'_nhash_{args.num_hashes}'
@@ -766,7 +785,7 @@ def train():
 
             return
 
-    # Re-seed
+    # Re-seed before loading data to ensure that the data is always loaded in the correct order
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -799,7 +818,7 @@ def train():
         rays_rgb = torch.Tensor(rays_rgb).to(device)
 
 
-    N_iters = 200000 + 1
+    N_iters = 50000 + 1
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -873,8 +892,25 @@ def train():
         if 'rgb0' in extras:
             img_loss0 = img2mse(extras['rgb0'], target_s)
             loss = loss + img_loss0
-            # psnr0 = mse2psnr(img_loss0)  # commented because it's not used
-        
+            # psnr0 = mse2psnr(img_loss0)  # commented because it's not used, uncomment for use
+
+        sparsity_loss = args.sparse_loss_weight*(extras["sparsity_loss"].sum() + extras["sparsity_loss0"].sum())
+        loss = loss + sparsity_loss
+       
+        # add Total Variation loss
+        if args.i_embed==1:
+            n_levels = render_kwargs_train["embed_fn"].n_levels
+            min_res = render_kwargs_train["embed_fn"].base_resolution
+            max_res = render_kwargs_train["embed_fn"].finest_resolution
+            log2_hashmap_size = render_kwargs_train["embed_fn"].log2_hashmap_size
+            TV_loss = sum(total_variation_loss(render_kwargs_train["embed_fn"].embeddings[i], \
+                                              min_res, max_res, \
+                                              i, log2_hashmap_size, \
+                                              n_levels=n_levels) for i in range(n_levels))
+            loss = loss + args.tv_loss_weight * TV_loss
+            if i>1000:
+                args.tv_loss_weight = 0.0
+ 
         loss.backward()
         optimizer.step()
 
@@ -969,7 +1005,7 @@ def train():
             }
             with open(os.path.join(basedir, expname, "loss_vs_time.pkl"), "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
-
+        
         global_step += 1
 
 
