@@ -433,7 +433,6 @@ def render_rays(ray_batch,
 
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
-
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
     rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
@@ -581,7 +580,7 @@ def config_parser():
                         help='frequency of weight ckpt saving')
     parser.add_argument("--i_testset", type=int, default=1000, 
                         help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=1000, 
+    parser.add_argument("--i_video",   type=int, default=5000, 
                         help='frequency of render_poses video saving')
 
     parser.add_argument("--finest_res",   type=int, default=512, 
@@ -590,7 +589,7 @@ def config_parser():
                         help='log2 of hashmap size')
     parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
                         help='learning rate')
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-4,
+    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
                         help='learning rate')
  
     return parser
@@ -604,12 +603,14 @@ def train():
     # Load data
     K = None
     if args.dataset_type == 'llff':
-        images, poses, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
+        images, poses, bds, render_poses, i_test, bounding_box = load_llff_data(args.datadir, args.factor,
                                                                   recenter=True, bd_factor=.75,
                                                                   spherify=args.spherify)
         hwf = poses[0,:3,-1]
         poses = poses[:,:3,:4]
+        args.bounding_box = bounding_box
         print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
+
         if not isinstance(i_test, list):
             i_test = [i_test]
 
