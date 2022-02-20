@@ -153,6 +153,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = []
     disps = []
+    psnrs = []
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
@@ -164,11 +165,11 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         if i==0:
             print(rgb.shape, disp.shape)
 
-        """
         if gt_imgs is not None and render_factor==0:
             p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_imgs[i])))
             print(p)
-        """
+            psnrs.append(p)
+        
 
         if savedir is not None:
             rgb8 = to8b(rgbs[-1])
@@ -178,6 +179,8 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = np.stack(rgbs, 0)
     disps = np.stack(disps, 0)
+    if gt_imgs is not None and render_factor==0:
+        print("Avg PSNR over Test set: ", sum(psnrs)/len(psnrs))
 
     return rgbs, disps
 
