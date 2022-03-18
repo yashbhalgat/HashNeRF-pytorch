@@ -9,13 +9,19 @@ from ray_utils import get_rays, get_ray_directions, get_ndc_rays
 BOX_OFFSETS = torch.tensor([[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]],
                                device='cuda')
 
+
 def hash(coords, log2_hashmap_size):
     '''
-    coords: 3D coordinates. B x 3
+    coords: this function can process upto 7 dim coordinates
     log2T:  logarithm of T w.r.t 2
     '''
-    x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
-    return ((1<<log2_hashmap_size)-1) & (x*73856093 ^ y*19349663 ^ z*83492791)
+    primes = [1, 2654435761, 805459861, 3674653429, 2097192037, 1434869437, 2165219737]
+
+    xor_result = torch.zeros_like(coords)[..., 0]
+    for i in range(coords.shape[-1]):
+        xor_result ^= coords[..., i]*primes[i]
+
+    return torch.tensor((1<<log2_hashmap_size)-1).to(xor_result.device) & xor_result
 
 
 def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
