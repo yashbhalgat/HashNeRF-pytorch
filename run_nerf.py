@@ -19,6 +19,7 @@ from run_nerf_helpers import *
 from optimizer import MultiOptimizer
 from radam import RAdam
 from loss import sigma_sparsity_loss, total_variation_loss
+from mesh_utils import generate_and_write_mesh
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -540,6 +541,12 @@ def config_parser():
     parser.add_argument("--render_factor", type=int, default=0, 
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
+    # mesh options 
+    parser.add_argument("--mesh_only", action='store_true', 
+                        help='do not optimize, reload weights and generate mesh')
+    parser.add_argument("--mesh_res", type=int, default=256, 
+                        help='resolution of grid for marching cubes')
+
     # training options
     parser.add_argument("--precrop_iters", type=int, default=0,
                         help='number of steps to train on central crops')
@@ -585,6 +592,8 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video",   type=int, default=5000, 
                         help='frequency of render_poses video saving')
+    parser.add_argument("--i_mesh", type=int, default=1000,
+                        help='frequency of mesh saving')
 
     parser.add_argument("--finest_res",   type=int, default=512, 
                         help='finest resolultion for hashed embedding')
@@ -756,6 +765,16 @@ def train():
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
             return
+
+    if args.mesh_only:
+        levels = [0, 5, 10, 15, 20]
+        print(f"Generating mesh at levels {levels}")
+        num_pts = args.mesh_res
+        root_path = os.path.join(basedir, expname, 'test')
+        os.makedirs(root_path, exist_ok=True)
+        generate_and_write_mesh(bounding_box, num_pts, levels, args.chunk, device, root_path, **render_kwargs_train)
+        print('Done, saving mesh at ', root_path)
+        return 
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
@@ -929,6 +948,17 @@ def train():
             #         rgbs_still, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test)
             #     render_kwargs_test['c2w_staticcam'] = None
             #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
+
+        if i%args.i_mesh==0 and i > 0:
+            levels = [5, 10, 20]
+            print(f"Generating mesh at levels {levels}")
+            num_pts = args.mesh_res
+            root_path = os.path.join(basedir, expname, 'train')
+            os.makedirs(root_path, exist_ok=True)
+
+            with torch.no_grad():
+                generate_and_write_mesh(bounding_box, num_pts, levels, args.chunk, device, root_path, **render_kwargs_train)
+            print('Done, saving mesh at ', root_path)
 
         if i%args.i_testset==0 and i > 0:
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))

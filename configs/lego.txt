@@ -1,6 +1,6 @@
 expname = blender_paper_lego
 basedir = ./logs
-datadir = ./data/nerf_synthetic/lego
+datadir = /home/ubuntu/aman/datasets/lego
 dataset_type = blender
 
 no_batching = True
@@ -17,3 +17,5 @@ precrop_iters = 500
 precrop_frac = 0.5
 
 half_res = True
+
+mesh_res = 256
