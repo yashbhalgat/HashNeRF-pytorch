@@ -116,6 +116,7 @@ def generate_and_write_mesh(bounding_box, num_pts, levels, chunk, device, ply_ro
 
     for level in levels:
         try:
-            convert_sigma_samples_to_ply(input_sigma_arr, list(bb_min), [1, 1, 1], osp.join(ply_root, f"test_mesh_{level}.ply"), level = level)
+            sizes = (abs(bounding_box[1] - bounding_box[0]).cpu()).tolist()
+            convert_sigma_samples_to_ply(input_sigma_arr, list(bb_min), sizes, osp.join(ply_root, f"test_mesh_{level}.ply"), level = level)
         except ValueError:
             print(f"Density field does not seem to have an isosurface at level {level} yet")
