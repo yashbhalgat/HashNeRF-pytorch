@@ -166,7 +166,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
             print(rgb.shape, disp.shape)
 
         if gt_imgs is not None and render_factor==0:
-            p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_imgs[i])))
+            p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - (gt_imgs[i].cpu().numpy() if type(gt_imgs) == torch.Tensor else gt_imgs[i]))))
             print(p)
             psnrs.append(p)
         
