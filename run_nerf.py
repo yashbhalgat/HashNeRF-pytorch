@@ -360,9 +360,11 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         rgb_map = rgb_map + (1.-acc_map[...,None])
 
     # Calculate weights sparsity loss
-    mask = weights.sum(-1) > 0.5
-    entropy = Categorical(probs = weights+1e-5).entropy()
-    sparsity_loss = entropy * mask
+    try:
+        entropy = Categorical(probs = torch.cat([weights, 1.0-weights.sum(-1, keepdim=True)+1e-6], dim=-1)).entropy()
+    except:
+        pdb.set_trace()
+    sparsity_loss = entropy
 
     return rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss
 
@@ -645,7 +647,6 @@ def train():
     elif args.dataset_type == 'blender':
         images, poses, render_poses, hwf, i_split, bounding_box = load_blender_data(args.datadir, args.half_res, args.testskip)
         args.bounding_box = bounding_box
-        pdb.set_trace()
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
