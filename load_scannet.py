@@ -5,8 +5,7 @@ import imageio
 import json
 import torch.nn.functional as F
 import cv2
-
-from utils import get_bbox3d_for_blenderobj
+import pyvista as pv
 
 trans_t = lambda t : torch.Tensor([
     [1,0,0,0],
@@ -35,7 +34,13 @@ def pose_spherical(theta, phi, radius):
     return c2w
 
 
-def load_blender_data(basedir, half_res=False, testskip=1):
+def load_scannet_data(basedir, sceneID, half_res=False, trainskip=10, testskip=1):
+    '''
+    basedir is something like: "/work/yashsb/datasets/ScanNet/"
+    '''
+    scansdir = os.path.join(basedir, "scans")
+    basedir = os.path.join(basedir, "nerfstyle_"+sceneID)
+
     splits = ['train', 'val', 'test']
     metas = {}
     for s in splits:
@@ -49,15 +54,22 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         meta = metas[s]
         imgs = []
         poses = []
-        if s=='train' or testskip==0:
-            skip = 1
+        if s=='train':
+            skip = trainskip
         else:
             skip = testskip
             
         for frame in meta['frames'][::skip]:
             fname = os.path.join(basedir, frame['file_path'] + '.png')
             imgs.append(imageio.imread(fname))
-            poses.append(np.array(frame['transform_matrix']))
+            pose = np.array(frame['transform_matrix'])
+
+            ### NEED to do this because ScanNet uses OpenCV convention
+            pose[:3, 1] *= -1
+            pose[:3, 2] *= -1
+
+            poses.append(pose)
+
         imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
         poses = np.array(poses).astype(np.float32)
         counts.append(counts[-1] + imgs.shape[0])
@@ -80,12 +92,16 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         W = W//2
         focal = focal/2.
 
-        imgs_half_res = np.zeros((imgs.shape[0], H, W, 4))
+        imgs_half_res = np.zeros((imgs.shape[0], H, W, 3))
         for i, img in enumerate(imgs):
             imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
         imgs = imgs_half_res
         # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
 
-    bounding_box = get_bbox3d_for_blenderobj(metas["train"], H, W, near=2.0, far=6.0)
+    ## getting an approximate bounding box for the scene
+    # load scene mesh
+    mesh = pv.read(os.path.join(scansdir, sceneID, f"{sceneID}_vh_clean.ply"))
+    # get the bounding box
+    bounding_box = torch.tensor(mesh.bounds[::2]) - 1, torch.tensor(mesh.bounds[1::2]) + 1
         
     return imgs, poses, render_poses, [H, W, focal], i_split, bounding_box

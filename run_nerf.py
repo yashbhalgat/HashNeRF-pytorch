@@ -23,6 +23,7 @@ from loss import sigma_sparsity_loss, total_variation_loss
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
+from load_scannet import load_scannet_data
 from load_LINEMOD import load_LINEMOD_data
 
 
@@ -45,7 +46,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
     """Prepares inputs and applies network 'fn'.
     """
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded = embed_fn(inputs_flat)
+    embedded, keep_mask = embed_fn(inputs_flat)
 
     if viewdirs is not None:
         input_dirs = viewdirs[:,None].expand(inputs.shape)
@@ -54,6 +55,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
     outputs_flat = batchify(fn, netchunk)(embedded)
+    outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
 
@@ -135,7 +137,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
-    k_extract = ['rgb_map', 'disp_map', 'acc_map']
+    k_extract = ['rgb_map', 'depth_map', 'acc_map']
     ret_list = [all_ret[k] for k in k_extract]
     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
@@ -144,6 +146,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
 def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
 
     H, W, focal = hwf
+    near, far = render_kwargs['near'], render_kwargs['far']
 
     if render_factor!=0:
         # Render downsampled for speed
@@ -152,18 +155,20 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         focal = focal/render_factor
 
     rgbs = []
-    disps = []
+    depths = []
     psnrs = []
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
         print(i, time.time() - t)
         t = time.time()
-        rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, depth, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
-        disps.append(disp.cpu().numpy())
+        # normalize depth to [0,1]
+        depth = (depth - near) / (far - near)
+        depths.append(depth.cpu().numpy())
         if i==0:
-            print(rgb.shape, disp.shape)
+            print(rgb.shape, depth.shape)
 
         if gt_imgs is not None and render_factor==0:
             try:
@@ -174,11 +179,21 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
             print(p)
             psnrs.append(p)
 
-
         if savedir is not None:
+            # save rgb and depth as a figure
+            fig = plt.figure(figsize=(25,15))
+            ax = fig.add_subplot(1, 2, 1)
             rgb8 = to8b(rgbs[-1])
+            ax.imshow(rgb8)
+            ax.axis('off')
+            ax = fig.add_subplot(1, 2, 2)
+            ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
+            ax.axis('off')
             filename = os.path.join(savedir, '{:03d}.png'.format(i))
-            imageio.imwrite(filename, rgb8)
+            # save as png
+            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+            plt.close(fig)
+            # imageio.imwrite(filename, rgb8)
 
 
     rgbs = np.stack(rgbs, 0)
@@ -224,9 +239,6 @@ def create_nerf(args):
 
     model_fine = None
 
-    # if args.i_embed==1:
-    #     args.N_importance = 0
-
     if args.N_importance > 0:
         if args.i_embed==1:
             model_fine = NeRFSmall(num_layers=2,
@@ -248,9 +260,6 @@ def create_nerf(args):
 
     # Create optimizer
     if args.i_embed==1:
-        # sparse_opt = torch.optim.SparseAdam(embedding_params, lr=args.lrate, betas=(0.9, 0.99), eps=1e-15)
-        # dense_opt = torch.optim.Adam(grad_vars, lr=args.lrate, betas=(0.9, 0.99), weight_decay=1e-6)
-        # optimizer = MultiOptimizer(optimizers={"sparse_opt": sparse_opt, "dense_opt": dense_opt})
         optimizer = RAdam([
                             {'params': grad_vars, 'weight_decay': 1e-6},
                             {'params': embedding_params, 'eps': 1e-15}
@@ -352,8 +361,8 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
 
-    depth_map = torch.sum(weights * z_vals, -1)
-    disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
+    depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
+    disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map)
     acc_map = torch.sum(weights, -1)
 
     if white_bkgd:
@@ -445,13 +454,12 @@ def render_rays(ray_batch,
 
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
-#     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
     rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
-        rgb_map_0, disp_map_0, acc_map_0, sparsity_loss_0 = rgb_map, disp_map, acc_map, sparsity_loss
+        rgb_map_0, depth_map_0, acc_map_0, sparsity_loss_0 = rgb_map, depth_map, acc_map, sparsity_loss
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
@@ -466,12 +474,12 @@ def render_rays(ray_batch,
 
         rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
-    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map, 'sparsity_loss': sparsity_loss}
+    ret = {'rgb_map' : rgb_map, 'depth_map' : depth_map, 'acc_map' : acc_map, 'sparsity_loss': sparsity_loss}
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
         ret['rgb0'] = rgb_map_0
-        ret['disp0'] = disp_map_0
+        ret['depth0'] = depth_map_0
         ret['acc0'] = acc_map_0
         ret['sparsity_loss0'] = sparsity_loss_0
         ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
@@ -571,6 +579,10 @@ def config_parser():
     parser.add_argument("--half_res", action='store_true',
                         help='load blender synthetic data at 400x400 instead of 800x800')
 
+    ## scannet flags
+    parser.add_argument("--scannet_sceneID", type=str, default='scene0000_00',
+                        help='sceneID to load from scannet')
+
     ## llff flags
     parser.add_argument("--factor", type=int, default=8,
                         help='downsample factor for LLFF images')
@@ -657,6 +669,15 @@ def train():
             images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
         else:
             images = images[...,:3]
+
+    elif args.dataset_type == 'scannet':
+        images, poses, render_poses, hwf, i_split, bounding_box = load_scannet_data(args.datadir, args.scannet_sceneID, args.half_res)
+        args.bounding_box = bounding_box
+        print('Loaded scannet', images.shape, render_poses.shape, hwf, args.datadir)
+        i_train, i_val, i_test = i_split
+
+        near = 0.1
+        far = 10.0
 
     elif args.dataset_type == 'LINEMOD':
         images, poses, render_poses, hwf, K, i_split, near, far = load_LINEMOD_data(args.datadir, args.half_res, args.testskip)
@@ -854,7 +875,7 @@ def train():
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
         #####  Core optimization loop  #####
-        rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
+        rgb, depth, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                                 verbose=i < 10, retraw=True,
                                                 **render_kwargs_train)
 

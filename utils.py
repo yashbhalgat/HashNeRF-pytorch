@@ -100,9 +100,9 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
     '''
     box_min, box_max = bounding_box
 
+    keep_mask = xyz==torch.max(torch.min(xyz, box_max), box_min)
     if not torch.all(xyz <= box_max) or not torch.all(xyz >= box_min):
         # print("ALERT: some points are outside bounding box. Clipping them!")
-        pdb.set_trace()
         xyz = torch.clamp(xyz, min=box_min, max=box_max)
 
     grid_size = (box_max-box_min)/resolution
@@ -111,18 +111,10 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
     voxel_min_vertex = bottom_left_idx*grid_size + box_min
     voxel_max_vertex = voxel_min_vertex + torch.tensor([1.0,1.0,1.0])*grid_size
 
-    # hashed_voxel_indices = [] # B x 8 ... 000,001,010,011,100,101,110,111
-    # for i in [0, 1]:
-    #     for j in [0, 1]:
-    #         for k in [0, 1]:
-    #             vertex_idx = bottom_left_idx + torch.tensor([i,j,k])
-    #             # vertex = bottom_left + torch.tensor([i,j,k])*grid_size
-    #             hashed_voxel_indices.append(hash(vertex_idx, log2_hashmap_size))
-
     voxel_indices = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS
     hashed_voxel_indices = hash(voxel_indices, log2_hashmap_size)
 
-    return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices
+    return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices, keep_mask
 
 
 

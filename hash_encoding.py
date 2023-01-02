@@ -60,7 +60,7 @@ class HashEmbedder(nn.Module):
         x_embedded_all = []
         for i in range(self.n_levels):
             resolution = torch.floor(self.base_resolution * self.b**i)
-            voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices = get_voxel_vertices(\
+            voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices, keep_mask = get_voxel_vertices(\
                                                 x, self.bounding_box, \
                                                 resolution, self.log2_hashmap_size)
             
@@ -69,7 +69,8 @@ class HashEmbedder(nn.Module):
             x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
             x_embedded_all.append(x_embedded)
 
-        return torch.cat(x_embedded_all, dim=-1)
+        keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
+        return torch.cat(x_embedded_all, dim=-1), keep_mask
 
 
 class SHEncoder(nn.Module):

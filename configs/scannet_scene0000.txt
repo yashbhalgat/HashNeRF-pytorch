@@ -1,0 +1,14 @@
+expname = scannet_scene0000_00
+basedir = ./logs
+datadir = /work/yashsb/datasets/ScanNet/
+dataset_type = scannet
+
+no_batching = False
+
+use_viewdirs = True
+white_bkgd = False
+lrate_decay = 500
+
+N_samples = 64
+N_importance = 128
+N_rand = 1024
