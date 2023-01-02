@@ -18,5 +18,5 @@ python reader.py --filename [.sens file to export data from] --output_path [outp
 ```
 
 ### 3. Then, use this [script](https://github.com/zju3dv/object_nerf/blob/main/data_preparation/scannet_sens_reader/convert_to_nerf_style_data.py) to convert the data to NeRF-style format. For instructions, see Step 1 [here](https://github.com/zju3dv/object_nerf/tree/main/data_preparation).
-	1. The generated transforms_xxx.json comes with transformation matrix (from camera coordinate to world coordinate) in SLAM / OpenCV format (xyz -> right down forward). You need to change to NDC format (xyz -> right up back) in the dataloader for training with NeRF convention.
-	2. For example, see the conversion done [here](https://github.com/cvg/nice-slam/blob/7af15cc33729aa5a8ca052908d96f495e34ab34c/src/utils/datasets.py#L205).
+1. The transformation matrices (`c2w`) in the generated transforms_xxx.json will be in SLAM / OpenCV format (xyz -> right down forward). You need to change to NDC format (xyz -> right up back) in the dataloader for training with NeRF convention.
+2. For example, see the conversion done [here](https://github.com/cvg/nice-slam/blob/7af15cc33729aa5a8ca052908d96f495e34ab34c/src/utils/datasets.py#L205).
