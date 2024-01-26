@@ -1,0 +1,33 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: HashNeRF-pytorch
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Yash
+    family-names: Bhalgat
+    email: yashbhalgat95@gmail.com
+    affiliation: University of Oxford
+    orcid: 'https://orcid.org/0000-0001-7775-6250'
+url: 'https://github.com/yashbhalgat/HashNeRF-pytorch'
+abstract: >-
+  HashNeRF-pytorch is a pure PyTorch Implementation of the
+  NVIDIA paper on Instant Training of Neural Graphics
+  primitives (Instant-NGP). This codebase was built with the
+  purpose of enabling AI Researchers to play around and
+  innovate further upon this method.
+keywords:
+  - machine learning
+  - artificial intelligence
+  - computer vision
+  - computer graphics
+  - nerf
+  - 3D reconstruction
+  - neural rendering
+license: MIT
+version: '1.0'
+date-released: '2022-06-01'
