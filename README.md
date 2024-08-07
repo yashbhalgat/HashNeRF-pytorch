@@ -79,3 +79,7 @@ If you find this project useful, please consider to cite:
   year={2022}
 }
 ```
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=yashbhalgat/HashNeRF-pytorch&type=Date)](https://star-history.com/#yashbhalgat/HashNeRF-pytorch&Date)
