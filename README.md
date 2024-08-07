@@ -1,4 +1,10 @@
 # HashNeRF-pytorch
+
+### 🌟 Update 🌟 
+Get answers to any questions about this repository using this [HuggingFace Chatbot](https://hf.co/chat/assistant/66b33a28bb36e2de9d8a2a93).
+
+---
+
 [Instant-NGP](https://github.com/NVlabs/instant-ngp) recently introduced a Multi-resolution Hash Encoding for neural graphics primitives like [NeRFs](https://www.matthewtancik.com/nerf). The original NVIDIA implementation mainly in C++/CUDA, based on [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn), can train NeRFs upto 100x faster!
 
 This project is a **pure PyTorch** implementation of [Instant-NGP](https://github.com/NVlabs/instant-ngp), built with the purpose of enabling AI Researchers to play around and innovate further upon this method.
