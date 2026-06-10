@@ -6,6 +6,7 @@ import json
 import pdb
 import random
 import time
+import inspect
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,6 +31,22 @@ from load_LINEMOD import load_LINEMOD_data
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
 DEBUG = False
+
+
+def safe_torch_load(ckpt_path):
+    """Load checkpoints without falling back to arbitrary pickle execution."""
+    try:
+        load_signature = inspect.signature(torch.load)
+    except (TypeError, ValueError):
+        load_signature = None
+
+    if load_signature is None or 'weights_only' not in load_signature.parameters:
+        raise RuntimeError(
+            'Refusing to load checkpoint without torch.load(weights_only=True). '
+            'Please upgrade PyTorch or only load checkpoints from a trusted source.'
+        )
+
+    return torch.load(ckpt_path, weights_only=True)
 
 
 def batchify(fn, chunk):
@@ -283,7 +300,7 @@ def create_nerf(args):
     if len(ckpts) > 0 and not args.no_reload:
         ckpt_path = ckpts[-1]
         print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
+        ckpt = safe_torch_load(ckpt_path)
 
         start = ckpt['global_step']
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
